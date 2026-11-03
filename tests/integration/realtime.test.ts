@@ -1,132 +1,170 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Hono } from "hono";
-import type { HttpBindings } from "@hono/node-server";
-import { createGameHub, registerHub, type GameHub } from "../../api/realtime/hub";
+import { WebSocket } from "ws";
+import bootApp from "../../api/boot";
 import { startHttpServer, type RunningServer } from "../../api/runtime/serve";
 import {
+  newContext,
   registerUser,
   teardownTempDb,
   useTempDb,
   type TestDb,
 } from "./helpers";
-import { SESSION_COOKIE } from "../../contracts/constants";
-import WebSocket from "ws";
+
+/**
+ * End-to-end realtime checks against the REAL boot app: HTTP (tRPC, health)
+ * and WS upgrades share one Node server on an ephemeral port, exactly like
+ * the production runtime.
+ */
 
 let testDb: TestDb;
-let server: RunningServer | null = null;
+let server: RunningServer;
+let baseUrl: string;
+let wsUrl: string;
 
 beforeEach(() => {
   testDb = useTempDb();
+  server = startHttpServer(bootApp, 0);
+  baseUrl = `http://localhost:${server.port}`;
+  wsUrl = `ws://localhost:${server.port}/ws`;
 });
 
 afterEach(async () => {
-  if (server) {
-    await server.close();
-    server = null;
-  }
+  await server.close();
   teardownTempDb(testDb);
 });
 
-async function boot(): Promise<number> {
-  const app = new Hono<{ Bindings: HttpBindings }>();
-  app.get("/health", (c) => c.json({ ok: true }));
-  server = startHttpServer(app, 0);
-  return server.port;
+function connectWs(headers: Record<string, string>): Promise<WebSocket> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(wsUrl, { headers });
+    ws.once("open", () => resolve(ws));
+    ws.once("error", reject);
+  });
 }
 
-function connect(
-  port: number,
-  cookie?: string,
-  headers?: Record<string, string>,
-): Promise<{ ws: WebSocket; status: number | null }> {
-  return new Promise((resolve) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, {
-      headers: {
-        ...(cookie ? { cookie } : {}),
-        ...(headers ?? {}),
-      },
+function expectUpgradeFailure(
+  headers: Record<string, string>,
+  status: number,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(wsUrl, { headers });
+    ws.once("open", () => {
+      ws.close();
+      reject(new Error(`expected upgrade to fail with ${status}`));
     });
-    ws.once("open", () => resolve({ ws, status: null }));
-    ws.once("unexpected-response", (_req, res) =>
-      resolve({ ws, status: res.statusCode ?? 0 }),
-    );
-    ws.once("error", () => resolve({ ws, status: -1 }));
+    ws.once("unexpected-response", (_req, res) => {
+      try {
+        expect(res.statusCode).toBe(status);
+        resolve();
+      } catch (err) {
+        reject(err);
+      }
+    });
   });
 }
 
-describe("realtime hub", () => {
-  it("rejects upgrade without a session cookie", async () => {
-    const port = await boot();
-    const { ws, status } = await connect(port);
-    expect(status).toBe(401);
-    ws.terminate();
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+describe("realtime server", () => {
+  it("GET /api/health responds without authentication", async () => {
+    const res = await fetch(`${baseUrl}/api/health`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean };
+    expect(body.ok).toBe(true);
   });
 
-  it("rejects an invalid cookie and accepts a valid one", async () => {
-    const port = await boot();
-    const bad = await connect(port, `${SESSION_COOKIE}=junk`);
-    expect(bad.status).toBe(401);
-    bad.ws.terminate();
+  it("rejects WS upgrade without a session cookie (401)", async () => {
+    await expectUpgradeFailure({ origin: baseUrl }, 401);
+  });
 
+  it("rejects WS upgrade with a foreign Origin (403)", async () => {
     const user = await registerUser("wsuser");
-    const good = await connect(port, user.cookie);
-    expect(good.status).toBeNull();
-    good.ws.close();
+    await expectUpgradeFailure(
+      { origin: "http://evil.example", cookie: user.cookie },
+      403,
+    );
   });
 
-  it("rejects cross-origin upgrades", async () => {
-    const port = await boot();
-    const user = await registerUser("originuser");
-    const evil = await connect(port, user.cookie, {
-      origin: "http://evil.example",
-    });
-    expect(evil.status).toBe(403);
-    evil.ws.terminate();
+  it("rejects WS upgrade with a garbage cookie (401)", async () => {
+    await expectUpgradeFailure(
+      { origin: baseUrl, cookie: "dnd_session=junk" },
+      401,
+    );
   });
 
-  it("publishes game.changed to connected clients", async () => {
-    const port = await boot();
-    const user = await registerUser("sub");
-    const { ws } = await connect(port, user.cookie);
-
-    const hub: GameHub = server!.hub;
-    const received = new Promise<string>((resolve) => {
-      ws.once("message", (data) => resolve(String(data)));
+  it("accepts an authenticated same-origin upgrade and pushes game.changed after commit", async () => {
+    const user = await registerUser("wsmaster");
+    const ws = await connectWs({
+      origin: baseUrl,
+      cookie: user.cookie,
+      host: `localhost:${server.port}`,
     });
-    hub.publish({ type: "game.changed", revision: 42 });
-    const payload = JSON.parse(await received);
-    expect(payload).toEqual({ type: "game.changed", revision: 42 });
+
+    const messages: Array<{ type: string; revision: number }> = [];
+    ws.on("message", (data) => {
+      messages.push(JSON.parse(data.toString()));
+    });
+    expect(server.hub.clientCount()).toBe(1);
+
+    // Mutation goes through tRPC; the notification must arrive only after
+    // the transaction committed, carrying the new revision.
+    const session = await newContext(user.cookie);
+    const created = await session.caller.boards.create({ name: "Live" });
+
+    await expect
+      .poll(() => messages.length, { timeout: 2000, interval: 20 })
+      .toBe(1);
+    expect(messages[0]).toEqual({
+      type: "game.changed",
+      revision: created.revision,
+    });
+
     ws.close();
+    await expect
+      .poll(() => server.hub.clientCount(), { timeout: 2000, interval: 20 })
+      .toBe(0);
   });
 
-  it("close() detaches clients so close code 1012 is observable", async () => {
-    const port = await boot();
-    const user = await registerUser("closetest");
-    const { ws } = await connect(port, user.cookie);
-    const closed = new Promise<number>((resolve) => {
-      ws.once("close", (code) => resolve(code));
+  it("publishes nothing when a mutation rolls back", async () => {
+    const user = await registerUser("wsrollback");
+    const ws = await connectWs({
+      origin: baseUrl,
+      cookie: user.cookie,
+      host: `localhost:${server.port}`,
     });
-    server!.hub.close();
-    expect(await closed).toBe(1012);
-  });
-});
+    const messages: unknown[] = [];
+    ws.on("message", (data) => messages.push(JSON.parse(data.toString())));
 
-describe("registerHub", () => {
-  it("publishGameChanged is a no-op without a hub and publishes with one", async () => {
-    const { publishGameChanged } = await import("../../api/realtime/hub");
-    // No hub registered (helpers registered null) — must not throw.
-    publishGameChanged(1);
+    const session = await newContext(user.cookie);
+    await session.caller.boards.create({ name: "Live" });
+    const { token } = await session.caller.tokens.add({
+      kind: "hero",
+      label: "x",
+      hp: 5,
+      maxHp: 10,
+    });
+    await expect
+      .poll(() => messages.length, { timeout: 2000, interval: 20 })
+      .toBe(2);
 
-    const events: unknown[] = [];
-    const fakeHub: GameHub = {
-      handleUpgrade: () => {},
-      publish: (e) => events.push(e),
-      clientCount: () => 0,
-      close: () => {},
-    };
-    registerHub(fakeHub);
-    publishGameChanged(7);
-    expect(events).toEqual([{ type: "game.changed", revision: 7 }]);
-    registerHub(null);
+    // This update violates 0 <= hp <= maxHp and must roll back entirely:
+    // no revision bump is committed, so no event may be published.
+    messages.length = 0;
+    await session.caller.tokens
+      .update({ id: token.id, hp: 99 })
+      .then(
+        () => {
+          throw new Error("update should have failed");
+        },
+        () => {
+          // expected BAD_REQUEST
+        },
+      );
+    await sleep(300);
+    expect(messages).toHaveLength(0);
+
+    const state = await session.caller.game.state();
+    const persisted = state.tokens.find((t) => t.id === token.id);
+    expect(persisted?.hp).toBe(5);
+    ws.close();
   });
 });

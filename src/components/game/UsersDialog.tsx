@@ -1,15 +1,12 @@
-import { useState } from "react";
-import { Loader2, ShieldAlert, ShieldCheck, Users } from "lucide-react";
-import { api, usersListKey, reportMutationError, trpcErrorMessage } from "@/lib/api";
-import { queryClient } from "@/providers/trpc";
-import type { GameRole } from "@/lib/game-contract";
+import { Shield, Swords } from "lucide-react";
+import { toast } from "sonner";
+import { api, invalidateGameState, invalidateUsers, trpcErrorMessage } from "@/lib/api";
+import type { GameRole, UserDto } from "@/lib/game-contract";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -28,110 +25,109 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { FullScreenLoader } from "./FullScreenState";
 
 export function UsersDialog({
   open,
   onOpenChange,
-  myId,
+  me,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  myId: number;
+  me: UserDto;
 }) {
-  const [actionError, setActionError] = useState<string | null>(null);
-
-  const usersQuery = api.users.list.useQuery(undefined, { enabled: open });
-  const setRole = api.users.setGameRole.useMutation({
-    onSuccess: () => {
-      setActionError(null);
-      void queryClient.invalidateQueries({ queryKey: [...usersListKey] });
-      // Role changes may affect me too (self-demotion).
-      void queryClient.invalidateQueries();
-    },
-    onError: (error) => {
-      reportMutationError("setGameRole")(error);
-      setActionError(trpcErrorMessage(error, "Не удалось сменить роль"));
-    },
+  const usersQuery = api.users.list.useQuery(undefined, {
+    enabled: open,
+    retry: 1,
   });
+  const setRoleMutation = api.users.setGameRole.useMutation();
+
+  const changeRole = (userId: number, gameRole: GameRole) => {
+    setRoleMutation.mutate(
+      { userId, gameRole },
+      {
+        onSuccess: () => {
+          invalidateUsers();
+          invalidateGameState();
+        },
+        onError: (err) => {
+          toast.error(trpcErrorMessage(err, "Не удалось изменить роль"));
+          invalidateUsers();
+        },
+      },
+    );
+  };
+
+  const users = usersQuery.data ?? [];
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg" data-testid="users-dialog">
+      <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Users className="size-4 text-primary" />
-            Люди за столом
-          </DialogTitle>
-          <DialogDescription>
-            Роли в общем пространстве. Первый зарегистрированный — мастер.
+          <DialogTitle className="text-sm">Пользователи и роли</DialogTitle>
+          <DialogDescription className="text-xs">
+            Мастер управляет игровыми ролями. Последнего мастера понизить нельзя.
           </DialogDescription>
         </DialogHeader>
 
         {usersQuery.isLoading ? (
-          <div className="py-6">
-            <FullScreenLoader label="Загрузка списка…" />
-          </div>
+          <p className="py-6 text-center text-xs text-muted-foreground">Загрузка…</p>
         ) : usersQuery.isError ? (
-          <p className="py-4 text-sm text-destructive">
-            {trpcErrorMessage(usersQuery.error, "Не удалось загрузить список")}
-          </p>
+          <div className="space-y-2 py-4 text-center">
+            <p className="text-xs text-destructive-foreground">
+              {trpcErrorMessage(usersQuery.error, "Не удалось загрузить пользователей")}
+            </p>
+            <button
+              type="button"
+              className="ui-hover text-xs text-primary underline-offset-2 hover:underline"
+              onClick={() => void usersQuery.refetch()}
+            >
+              Повторить
+            </button>
+          </div>
+        ) : users.length === 0 ? (
+          <p className="py-6 text-center text-xs text-muted-foreground">Пользователей нет</p>
         ) : (
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Имя</TableHead>
-                <TableHead>Логин</TableHead>
-                <TableHead className="w-[140px]">Роль</TableHead>
+                <TableHead className="text-xs">Имя</TableHead>
+                <TableHead className="text-xs">Логин</TableHead>
+                <TableHead className="w-32 text-xs">Роль</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {(usersQuery.data ?? []).map((u) => {
-                const isSelf = u.id === myId;
-                const isMaster = u.gameRole === "master";
+              {users.map((u) => {
+                const isSelf = u.id === me.id;
                 return (
                   <TableRow key={u.id}>
-                    <TableCell className="font-medium">
-                      {u.displayName}
-                      {isSelf ? (
-                        <span className="ml-2 text-xs text-muted-foreground">(вы)</span>
-                      ) : null}
+                    <TableCell className="text-xs">
+                      <span className="flex items-center gap-1.5">
+                        {u.gameRole === "master" ? (
+                          <Shield className="size-3.5 text-primary" />
+                        ) : (
+                          <Swords className="size-3.5 text-muted-foreground" />
+                        )}
+                        <span className="truncate">{u.displayName || u.login}</span>
+                        {isSelf ? (
+                          <Badge variant="secondary" className="px-1 text-[10px]">вы</Badge>
+                        ) : null}
+                      </span>
                     </TableCell>
-                    <TableCell className="text-muted-foreground">{u.login}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{u.login}</TableCell>
                     <TableCell>
-                      <div className="flex items-center gap-2">
-                        <Badge variant={isMaster ? "default" : "secondary"} className="gap-1">
-                          {isMaster ? (
-                            <ShieldCheck className="size-3" />
-                          ) : (
-                            <ShieldAlert className="size-3" />
-                          )}
-                          {isMaster ? "Мастер" : "Игрок"}
-                        </Badge>
-                        <Select
-                          value={u.gameRole}
-                          disabled={setRole.isPending}
-                          onValueChange={(v) =>
-                            setRole.mutate({ userId: u.id, gameRole: v as GameRole })
-                          }
-                        >
-                          <SelectTrigger
-                            size="sm"
-                            className="ui-hover h-7 w-[110px] text-xs"
-                            data-testid={`role-select-${u.id}`}
-                          >
-                            {setRole.isPending ? (
-                              <Loader2 className="size-3 animate-spin" />
-                            ) : (
-                              <SelectValue />
-                            )}
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="master">Мастер</SelectItem>
-                            <SelectItem value="player">Игрок</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
+                      <Select
+                        value={u.gameRole}
+                        onValueChange={(v) => changeRole(u.id, v as GameRole)}
+                        disabled={setRoleMutation.isPending}
+                      >
+                        <SelectTrigger className="ui-hover h-7 w-28 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="master" className="text-xs">Мастер</SelectItem>
+                          <SelectItem value="player" className="text-xs">Игрок</SelectItem>
+                        </SelectContent>
+                      </Select>
                     </TableCell>
                   </TableRow>
                 );
@@ -139,16 +135,6 @@ export function UsersDialog({
             </TableBody>
           </Table>
         )}
-
-        {actionError ? (
-          <p className="text-xs text-destructive">{actionError}</p>
-        ) : null}
-
-        <DialogFooter>
-          <Button variant="outline" size="sm" className="ui-hover" onClick={() => onOpenChange(false)}>
-            Закрыть
-          </Button>
-        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
