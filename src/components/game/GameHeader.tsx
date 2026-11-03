@@ -1,22 +1,29 @@
-import { useState, type FormEvent } from "react";
+import { useState } from "react";
 import {
   Check,
-  Layers,
-  Loader2,
+  ChevronDown,
+  Grid3x3,
+  ListOrdered,
   LogOut,
+  Map as MapIcon,
   Pencil,
   Plus,
-  Star,
   Trash2,
-  Users,
+  Users as UsersIcon,
   Wifi,
   WifiOff,
 } from "lucide-react";
-import { api, invalidateAuth, reportMutationError } from "@/lib/api";
-import type { RealtimeStatus } from "@/lib/realtime";
+import { toast } from "sonner";
+import { queryClient } from "@/providers/trpc";
+import { api, invalidateAuth, invalidateGameState, trpcErrorMessage } from "@/lib/api";
 import type { BoardDto, UserDto } from "@/lib/game-contract";
-import { Badge } from "@/components/ui/badge";
+import type { RealtimeStatus } from "@/lib/realtime";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
 import {
   Dialog,
   DialogContent,
@@ -32,227 +39,382 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
 import { BrandMark } from "./FullScreenState";
 
-interface GameHeaderProps {
-  me: UserDto;
-  boards: BoardDto[];
-  activeBoard: BoardDto | null;
-  wsStatus: RealtimeStatus;
-  busy: boolean;
-  onAddBoard?: (name: string) => void;
-  onRenameBoard?: (id: number, name: string) => void;
-  onRemoveBoard?: (id: number) => void;
-  onSetActiveBoard?: (id: number) => void;
-  onOpenUsers?: () => void;
+interface BoardFormDialogProps {
+  open: boolean;
+  title: string;
+  confirmLabel: string;
+  initialName?: string;
+  withSize?: boolean;
+  pending: boolean;
+  onSubmit: (values: { name: string; gridWidth: number; gridHeight: number }) => void;
+  onOpenChange: (open: boolean) => void;
 }
 
-function WsBadge({ status }: { status: RealtimeStatus }) {
-  if (status === "open") {
-    return (
-      <Badge variant="secondary" className="gap-1 text-xs" data-testid="ws-status">
-        <Wifi className="size-3 text-emerald-400" />
-        онлайн
-      </Badge>
-    );
-  }
-  return (
-    <Badge variant="secondary" className="gap-1 text-xs" data-testid="ws-status">
-      <WifiOff className="size-3 text-amber-400" />
-      {status === "connecting" ? "подключение…" : "офлайн (опрос)"}
-    </Badge>
-  );
-}
+function BoardFormDialog({
+  open,
+  title,
+  confirmLabel,
+  initialName = "",
+  withSize = false,
+  pending,
+  onSubmit,
+  onOpenChange,
+}: BoardFormDialogProps) {
+  const [name, setName] = useState(initialName);
+  const [gridWidth, setGridWidth] = useState(24);
+  const [gridHeight, setGridHeight] = useState(16);
 
-export function GameHeader({
-  me,
-  boards,
-  activeBoard,
-  wsStatus,
-  busy,
-  onAddBoard,
-  onRenameBoard,
-  onRemoveBoard,
-  onSetActiveBoard,
-  onOpenUsers,
-}: GameHeaderProps) {
-  const [boardDialog, setBoardDialog] = useState<
-    { mode: "add" } | { mode: "rename"; id: number; current: string } | null
-  >(null);
-  const [boardName, setBoardName] = useState("");
-  const logout = api.auth.logout.useMutation({ onSuccess: invalidateAuth });
-  const isMaster = me.gameRole === "master";
-
-  const submitBoardDialog = (e: FormEvent) => {
-    e.preventDefault();
-    const name = boardName.trim();
-    if (!name) return;
-    if (boardDialog?.mode === "rename") {
-      onRenameBoard?.(boardDialog.id, name);
-    } else {
-      onAddBoard?.(name);
-    }
-    setBoardDialog(null);
-    setBoardName("");
+  const submit = () => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    onSubmit({ name: trimmed, gridWidth, gridHeight });
   };
 
   return (
-    <header
-      className="flex h-12 items-center gap-3 border-b bg-card/60 px-3 backdrop-blur"
-      data-testid="game-header"
-    >
-      <div className="flex items-center gap-2">
-        <BrandMark className="size-5" />
-        <span className="text-sm font-semibold tracking-wide">DnD Board</span>
-      </div>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-xs" onOpenAutoFocus={() => setName(initialName)}>
+        <DialogHeader>
+          <DialogTitle className="text-sm">{title}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <Label htmlFor="board-name" className="text-xs">Название</Label>
+            <Input
+              id="board-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+              className="ui-hover h-8 text-sm"
+            />
+          </div>
+          {withSize ? (
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="board-w" className="text-xs">Ширина, клеток</Label>
+                <Input
+                  id="board-w"
+                  type="number"
+                  min={1}
+                  max={200}
+                  value={gridWidth}
+                  onChange={(e) => setGridWidth(Math.max(1, Number(e.target.value) || 1))}
+                  className="ui-hover h-8 text-sm"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="board-h" className="text-xs">Высота, клеток</Label>
+                <Input
+                  id="board-h"
+                  type="number"
+                  min={1}
+                  max={200}
+                  value={gridHeight}
+                  onChange={(e) => setGridHeight(Math.max(1, Number(e.target.value) || 1))}
+                  className="ui-hover h-8 text-sm"
+                />
+              </div>
+            </div>
+          ) : null}
+        </div>
+        <DialogFooter>
+          <Button size="sm" onClick={submit} disabled={pending || !name.trim()} className="ui-hover">
+            {confirmLabel}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
-      {/* Board switcher */}
+function BoardsMenu({ boards, activeBoard }: { boards: BoardDto[]; activeBoard: BoardDto | null }) {
+  const [createOpen, setCreateOpen] = useState(false);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [removeOpen, setRemoveOpen] = useState(false);
+
+  const onError = (err: unknown, fallback: string) =>
+    toast.error(trpcErrorMessage(err, fallback));
+  const onSuccess = () => invalidateGameState();
+
+  const createMutation = api.boards.create.useMutation();
+  const renameMutation = api.boards.rename.useMutation();
+  const removeMutation = api.boards.remove.useMutation();
+  const setActiveMutation = api.boards.setActive.useMutation();
+
+  return (
+    <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="outline" size="sm" className="ui-hover h-8 gap-1.5 text-xs" data-testid="boards-menu">
-            <Layers className="size-3.5" />
-            {activeBoard ? activeBoard.name : "Нет доски"}
+          <Button variant="outline" size="sm" className="ui-hover h-8 max-w-56 gap-1.5 text-xs">
+            <MapIcon className="size-3.5 shrink-0 text-primary" />
+            <span className="truncate">{activeBoard ? activeBoard.name : "Нет поля"}</span>
+            <ChevronDown className="size-3.5 shrink-0 opacity-60" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-56">
           {boards.length === 0 ? (
-            <DropdownMenuItem disabled>Досок пока нет</DropdownMenuItem>
+            <DropdownMenuItem disabled className="text-xs text-muted-foreground">
+              Полей пока нет
+            </DropdownMenuItem>
           ) : (
             boards.map((b) => (
               <DropdownMenuItem
                 key={b.id}
-                onSelect={() => (isMaster ? onSetActiveBoard?.(b.id) : undefined)}
-                className="flex items-center justify-between gap-2"
-                data-testid={`board-item-${b.id}`}
+                className="ui-hover flex items-center gap-2 text-xs"
+                onSelect={() => {
+                  if (!b.isActive) {
+                    setActiveMutation.mutate(
+                      { id: b.id },
+                      { onSuccess, onError: (e) => onError(e, "Не удалось переключить поле") },
+                    );
+                  }
+                }}
               >
+                <span className="flex size-3.5 items-center justify-center">
+                  {b.isActive ? <Check className="size-3.5 text-primary" /> : null}
+                </span>
                 <span className="truncate">{b.name}</span>
-                <span className="flex items-center gap-1">
-                  {b.isActive ? <Star className="size-3.5 text-primary" /> : null}
-                  {isMaster ? (
-                    <>
-                      <button
-                        type="button"
-                        className="ui-hover rounded-sm p-0.5 hover:bg-accent"
-                        aria-label={`Переименовать ${b.name}`}
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          setBoardName(b.name);
-                          setBoardDialog({ mode: "rename", id: b.id, current: b.name });
-                        }}
-                      >
-                        <Pencil className="size-3" />
-                      </button>
-                      <button
-                        type="button"
-                        className="ui-hover rounded-sm p-0.5 hover:bg-destructive/20"
-                        aria-label={`Удалить ${b.name}`}
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          if (window.confirm(`Удалить доску «${b.name}» со всеми токенами?`)) {
-                            onRemoveBoard?.(b.id);
-                          }
-                        }}
-                      >
-                        <Trash2 className="size-3" />
-                      </button>
-                    </>
-                  ) : null}
+                <span className="ml-auto text-[10px] text-muted-foreground">
+                  {b.gridWidth}×{b.gridHeight}
                 </span>
               </DropdownMenuItem>
             ))
           )}
-          {isMaster ? (
+          <DropdownMenuSeparator />
+          <DropdownMenuItem className="ui-hover text-xs" onSelect={() => setCreateOpen(true)}>
+            <Plus className="size-3.5" /> Создать поле
+          </DropdownMenuItem>
+          {activeBoard ? (
             <>
-              <DropdownMenuSeparator />
+              <DropdownMenuItem className="ui-hover text-xs" onSelect={() => setRenameOpen(true)}>
+                <Pencil className="size-3.5" /> Переименовать
+              </DropdownMenuItem>
               <DropdownMenuItem
-                onSelect={() => {
-                  setBoardName("");
-                  setBoardDialog({ mode: "add" });
-                }}
-                data-testid="add-board"
+                className="ui-hover text-xs text-destructive-foreground"
+                onSelect={() => setRemoveOpen(true)}
               >
-                <Plus className="size-3.5" />
-                Новая доска
+                <Trash2 className="size-3.5" /> Удалить поле
               </DropdownMenuItem>
             </>
           ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
 
-      {busy ? <Loader2 className="size-4 animate-spin text-muted-foreground" /> : null}
-
-      <div className="ml-auto flex items-center gap-2">
-        <WsBadge status={wsStatus} />
-        <Badge variant={isMaster ? "default" : "secondary"} className="text-xs">
-          {isMaster ? "Мастер" : "Игрок"}
-        </Badge>
-        <span className="text-xs text-muted-foreground">{me.displayName}</span>
-        {isMaster ? (
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className="ui-hover"
-            onClick={onOpenUsers}
-            aria-label="Люди за столом"
-            data-testid="users-button"
-          >
-            <Users className="size-4" />
-          </Button>
-        ) : null}
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className="ui-hover"
-          onClick={() => logout.mutate()}
-          aria-label="Выйти"
-          data-testid="logout-button"
-        >
-          <LogOut className="size-4" />
-        </Button>
-      </div>
-
-      {/* Add / rename board dialog */}
-      <Dialog open={boardDialog !== null} onOpenChange={(o) => (!o ? setBoardDialog(null) : undefined)}>
-        <DialogContent className="sm:max-w-sm">
+      <BoardFormDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        title="Новое поле"
+        confirmLabel="Создать"
+        withSize
+        pending={createMutation.isPending}
+        onSubmit={({ name, gridWidth, gridHeight }) =>
+          createMutation.mutate(
+            { name, gridWidth, gridHeight },
+            {
+              onSuccess: () => { onSuccess(); setCreateOpen(false); },
+              onError: (e) => onError(e, "Не удалось создать поле"),
+            },
+          )
+        }
+      />
+      <BoardFormDialog
+        open={renameOpen}
+        onOpenChange={setRenameOpen}
+        title="Переименовать поле"
+        confirmLabel="Сохранить"
+        initialName={activeBoard?.name ?? ""}
+        pending={renameMutation.isPending}
+        onSubmit={({ name }) =>
+          activeBoard &&
+          renameMutation.mutate(
+            { id: activeBoard.id, name },
+            {
+              onSuccess: () => { onSuccess(); setRenameOpen(false); },
+              onError: (e) => onError(e, "Не удалось переименовать поле"),
+            },
+          )
+        }
+      />
+      <Dialog open={removeOpen} onOpenChange={setRemoveOpen}>
+        <DialogContent className="max-w-xs">
           <DialogHeader>
-            <DialogTitle>
-              {boardDialog?.mode === "rename" ? "Переименовать доску" : "Новая доска"}
-            </DialogTitle>
-            <DialogDescription>
-              {boardDialog?.mode === "rename"
-                ? `Текущее имя: ${boardDialog.current}`
-                : "Доска появится у всех участников."}
+            <DialogTitle className="text-sm">Удалить поле</DialogTitle>
+            <DialogDescription className="text-xs">
+              Поле «{activeBoard?.name}» и все его токены будут удалены безвозвратно.
             </DialogDescription>
           </DialogHeader>
-          <form onSubmit={submitBoardDialog} className="space-y-3">
-            <Input
-              value={boardName}
-              onChange={(e) => setBoardName(e.target.value)}
-              placeholder="Название доски"
-              className="ui-hover h-9 text-sm"
-              autoFocus
-            />
-            <DialogFooter>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="ui-hover"
-                onClick={() => setBoardDialog(null)}
-              >
-                Отмена
-              </Button>
-              <Button type="submit" size="sm" className="ui-hover" disabled={!boardName.trim()}>
-                <Check className="size-4" />
-                {boardDialog?.mode === "rename" ? "Сохранить" : "Создать"}
-              </Button>
-            </DialogFooter>
-          </form>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setRemoveOpen(false)} className="ui-hover">
+              Отмена
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              disabled={removeMutation.isPending}
+              className="ui-hover"
+              onClick={() =>
+                activeBoard &&
+                removeMutation.mutate(
+                  { id: activeBoard.id },
+                  {
+                    onSuccess: () => { onSuccess(); setRemoveOpen(false); },
+                    onError: (e) => onError(e, "Не удалось удалить поле"),
+                  },
+                )
+              }
+            >
+              Удалить
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
+    </>
+  );
+}
+
+function ConnectionBadge({ status }: { status: RealtimeStatus }) {
+  if (status === "open") {
+    return (
+      <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground" title="Realtime-соединение активно">
+        <Wifi className="size-3.5 text-primary" />
+        <span className="hidden lg:inline">онлайн</span>
+      </span>
+    );
+  }
+  return (
+    <span
+      className="flex items-center gap-1.5 text-[11px] text-muted-foreground"
+      title={status === "connecting" ? "Подключение к серверу…" : "Нет соединения — опрос каждые 4 с"}
+    >
+      <WifiOff className={`size-3.5 ${status === "connecting" ? "animate-pulse text-primary" : "text-destructive"}`} />
+      <span className="hidden lg:inline">{status === "connecting" ? "подключение…" : "офлайн · опрос"}</span>
+    </span>
+  );
+}
+
+export interface GameHeaderProps {
+  me: UserDto;
+  boards: BoardDto[];
+  activeBoard: BoardDto | null;
+  isMaster: boolean;
+  gridOn: boolean;
+  onGridChange: (value: boolean) => void;
+  wsStatus: RealtimeStatus;
+  onAddToken: () => void;
+  onOpenInitiative: () => void;
+  onOpenUsers: () => void;
+}
+
+export function GameHeader({
+  me,
+  boards,
+  activeBoard,
+  isMaster,
+  gridOn,
+  onGridChange,
+  wsStatus,
+  onAddToken,
+  onOpenInitiative,
+  onOpenUsers,
+}: GameHeaderProps) {
+  const logoutMutation = api.auth.logout.useMutation();
+
+  return (
+    <header className="flex h-14 shrink-0 items-center gap-2 border-b bg-card/60 px-3">
+      <div className="flex items-center gap-2 pr-1">
+        <BrandMark className="size-5" />
+        <span className="hidden text-sm font-semibold tracking-wide sm:inline">DnD Board</span>
+      </div>
+
+      <Separator orientation="vertical" className="mx-1 h-6" />
+
+      {isMaster ? (
+        <BoardsMenu boards={boards} activeBoard={activeBoard} />
+      ) : (
+        <span className="flex h-8 max-w-56 items-center gap-1.5 truncate px-1 text-xs text-muted-foreground">
+          <MapIcon className="size-3.5 shrink-0 text-primary" />
+          <span className="truncate">{activeBoard ? activeBoard.name : "Нет поля"}</span>
+        </span>
+      )}
+
+      <div className="ml-auto flex items-center gap-1.5">
+        <div className="mr-1 hidden items-center gap-2 md:flex" title="Показывать сетку">
+          <Grid3x3 className="size-3.5 text-muted-foreground" />
+          <Switch checked={gridOn} onCheckedChange={onGridChange} aria-label="Сетка" />
+        </div>
+
+        {isMaster ? (
+          <Button
+            variant="outline"
+            size="sm"
+            className="ui-hover h-8 gap-1.5 text-xs"
+            onClick={onAddToken}
+            disabled={!activeBoard}
+            title="Добавить токен в центр поля"
+          >
+            <Plus className="size-3.5" />
+            <span className="hidden sm:inline">Токен</span>
+          </Button>
+        ) : null}
+
+        <Button
+          variant="outline"
+          size="sm"
+          className="ui-hover h-8 gap-1.5 text-xs"
+          onClick={onOpenInitiative}
+          disabled={!activeBoard}
+          title="Инициатива"
+        >
+          <ListOrdered className="size-3.5" />
+          <span className="hidden sm:inline">Инициатива</span>
+        </Button>
+
+        {isMaster ? (
+          <Button
+            variant="outline"
+            size="sm"
+            className="ui-hover h-8 gap-1.5 text-xs"
+            onClick={onOpenUsers}
+            title="Пользователи и роли"
+          >
+            <UsersIcon className="size-3.5" />
+            <span className="hidden sm:inline">Люди</span>
+          </Button>
+        ) : null}
+
+        <Separator orientation="vertical" className="mx-1 h-6" />
+
+        <ConnectionBadge status={wsStatus} />
+
+        <Badge
+          variant={isMaster ? "default" : "secondary"}
+          className="ml-1 h-6 px-2 text-[11px] font-medium"
+          title={isMaster ? "Мастер" : "Игрок"}
+        >
+          {me.displayName || me.login}
+        </Badge>
+
+        <Button
+          variant="ghost"
+          size="sm"
+          className="ui-hover h-8 gap-1.5 text-xs text-muted-foreground"
+          disabled={logoutMutation.isPending}
+          onClick={() =>
+            logoutMutation.mutate(undefined, {
+              onSuccess: () => {
+                queryClient.clear();
+                invalidateAuth();
+              },
+              onError: (e) => toast.error(trpcErrorMessage(e, "Не удалось выйти")),
+            })
+          }
+          title="Выйти"
+        >
+          <LogOut className="size-3.5" />
+          <span className="hidden sm:inline">Выход</span>
+        </Button>
+      </div>
     </header>
   );
 }
