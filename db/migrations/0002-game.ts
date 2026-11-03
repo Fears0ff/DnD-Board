@@ -1,8 +1,9 @@
 import type { Migration } from "./types";
 
 /**
- * 0002 game: boards, tokens, characters, compendium, media assets, notes.
- * Applied transactionally by db/migrate.ts; keep in sync with db/schema.ts.
+ * 0002 game: media assets, boards, characters, compendium items, tokens,
+ * notes. All FK actions (cascade / set null) and invariants (single active
+ * board, hp bounds, exclusive token refs) are declared here explicitly.
  */
 const migration: Migration = {
   version: "0002",
@@ -31,7 +32,8 @@ CREATE TABLE boards (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   CONSTRAINT boards_grid_bounds CHECK (
-    grid_width BETWEEN 1 AND 500 AND grid_height BETWEEN 1 AND 500
+    grid_width BETWEEN 1 AND 500
+    AND grid_height BETWEEN 1 AND 500
     AND cell_size BETWEEN 4 AND 1024
   )
 );
@@ -61,7 +63,9 @@ CREATE TABLE compendium_items (
   data TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
-  CONSTRAINT compendium_type CHECK (type IN ('spell','item','monster','character','species','class','feat','background')),
+  CONSTRAINT compendium_type CHECK (
+    type IN ('spell','item','monster','character','species','class','feat','background')
+  ),
   CONSTRAINT compendium_visibility CHECK (visibility IN ('private','shared'))
 );
 CREATE INDEX compendium_type_idx ON compendium_items (type);
@@ -86,8 +90,12 @@ CREATE TABLE tokens (
   updated_at INTEGER NOT NULL,
   CONSTRAINT tokens_kind CHECK (kind IN ('hero','monster','prop')),
   CONSTRAINT tokens_hp_bounds CHECK (hp >= 0 AND max_hp >= 0 AND hp <= max_hp),
-  CONSTRAINT tokens_refs_exclusive CHECK (NOT (character_id IS NOT NULL AND compendium_id IS NOT NULL)),
-  CONSTRAINT tokens_compendium_image CHECK (NOT (compendium_id IS NOT NULL AND image_key IS NOT NULL))
+  CONSTRAINT tokens_refs_exclusive CHECK (
+    NOT (character_id IS NOT NULL AND compendium_id IS NOT NULL)
+  ),
+  CONSTRAINT tokens_compendium_image CHECK (
+    NOT (compendium_id IS NOT NULL AND image_key IS NOT NULL)
+  )
 );
 CREATE INDEX tokens_board_idx ON tokens (board_id);
 CREATE INDEX tokens_owner_idx ON tokens (owner_id);

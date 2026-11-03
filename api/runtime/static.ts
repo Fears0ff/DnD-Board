@@ -7,14 +7,13 @@ import path from "node:path";
 type App = Hono<{ Bindings: HttpBindings }>;
 
 /**
- * Serves the built client (dist/public) with an SPA fallback: unknown paths
- * that accept HTML get index.html so client-side routes work on refresh.
- * Only registered in production; in dev the Vite dev-server owns the frontend.
+ * Production static serving anchored to the bundle, not process.cwd().
+ * The platform helper remains untouched; this adapter also works when a
+ * launcher starts dist/boot.js from an arbitrary working directory.
  */
 export function serveStaticFiles(app: App): void {
   const distPath = path.resolve(import.meta.dirname, "../dist/public");
-
-  app.use("*", serveStatic({ root: "./dist/public" }));
+  app.use("*", serveStatic({ root: distPath }));
 
   app.notFound((c) => {
     const accept = c.req.header("accept") ?? "";
@@ -22,7 +21,6 @@ export function serveStaticFiles(app: App): void {
       return c.json({ error: "Not Found" }, 404);
     }
     const indexPath = path.resolve(distPath, "index.html");
-    const content = fs.readFileSync(indexPath, "utf-8");
-    return c.html(content);
+    return c.html(fs.readFileSync(indexPath, "utf8"));
   });
 }

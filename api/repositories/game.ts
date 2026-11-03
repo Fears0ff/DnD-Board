@@ -6,21 +6,24 @@ import {
   type BoardRow,
   type TokenRow,
 } from "../../db/schema";
-import type { BoardDto, InitiativeEntry, TokenDto } from "../../contracts/game";
+import type { InitiativeEntry } from "../../contracts/game";
+import type { BoardDto, TokenDto } from "../../contracts/game";
 
 type Db = DbHandle;
 
-/* --------------------------------- mapping --------------------------------- */
+/* ---------------------------------- boards --------------------------------- */
 
 export function toBoardDto(row: BoardRow): BoardDto {
   return {
     id: row.id,
     name: row.name,
+    backgroundKey: row.backgroundKey,
     cellSize: row.cellSize,
     gridWidth: row.gridWidth,
     gridHeight: row.gridHeight,
     isActive: row.isActive,
     createdAt: new Date(row.createdAt).toISOString(),
+    updatedAt: new Date(row.updatedAt).toISOString(),
   };
 }
 
@@ -31,8 +34,6 @@ export function toTokenDto(row: TokenRow): TokenDto {
     kind: row.kind,
     label: row.label,
     ownerId: row.ownerId,
-    characterId: row.characterId,
-    compendiumId: row.compendiumId,
     cellX: row.cellX,
     cellY: row.cellY,
     hp: row.hp,
@@ -42,7 +43,27 @@ export function toTokenDto(row: TokenRow): TokenDto {
   };
 }
 
-/* ---------------------------------- boards --------------------------------- */
+export function parseInitiative(json: string): InitiativeEntry[] {
+  try {
+    const parsed: unknown = JSON.parse(json);
+    if (!Array.isArray(parsed)) return [];
+    const out: InitiativeEntry[] = [];
+    for (const item of parsed) {
+      if (
+        item &&
+        typeof item === "object" &&
+        Number.isInteger((item as InitiativeEntry).tokenId) &&
+        typeof (item as InitiativeEntry).value === "number"
+      ) {
+        const entry = item as InitiativeEntry;
+        out.push({ tokenId: entry.tokenId, value: entry.value });
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
 
 export function listBoards(db: Db): BoardRow[] {
   return db.select().from(boards).orderBy(asc(boards.id)).all();
@@ -73,16 +94,7 @@ export function insertBoard(
   const now = Date.now();
   return db
     .insert(boards)
-    .values({
-      name: values.name,
-      cellSize: values.cellSize,
-      gridWidth: values.gridWidth,
-      gridHeight: values.gridHeight,
-      isActive: values.isActive,
-      initiative: "[]",
-      createdAt: now,
-      updatedAt: now,
-    })
+    .values({ ...values, createdAt: now, updatedAt: now })
     .returning()
     .get();
 }
@@ -100,15 +112,30 @@ export function renameBoardRow(
     .get();
 }
 
-export function setBoardActiveFlag(db: Db, id: number, active: boolean): void {
+export function setBoardActiveFlag(
+  db: Db,
+  id: number,
+  isActive: boolean,
+): void {
   db.update(boards)
-    .set({ isActive: active, updatedAt: Date.now() })
+    .set({ isActive, updatedAt: Date.now() })
     .where(eq(boards.id, id))
     .run();
 }
 
 export function deleteBoardRow(db: Db, id: number): void {
   db.delete(boards).where(eq(boards.id, id)).run();
+}
+
+export function setBoardInitiative(
+  db: Db,
+  id: number,
+  entries: InitiativeEntry[],
+): void {
+  db.update(boards)
+    .set({ initiative: JSON.stringify(entries), updatedAt: Date.now() })
+    .where(eq(boards.id, id))
+    .run();
 }
 
 /* ---------------------------------- tokens --------------------------------- */
@@ -128,20 +155,7 @@ export function findTokenById(db: Db, id: number): TokenRow | undefined {
 
 export function insertToken(
   db: Db,
-  values: {
-    boardId: number;
-    kind: TokenRow["kind"];
-    label: string;
-    ownerId: number | null;
-    cellX: number;
-    cellY: number;
-    hp: number;
-    maxHp: number;
-    size: number;
-    characterId: number | null;
-    compendiumId: number | null;
-    imageKey: string | null;
-  },
+  values: Omit<typeof tokens.$inferInsert, "id" | "createdAt" | "updatedAt">,
 ): TokenRow {
   const now = Date.now();
   return db
@@ -175,33 +189,4 @@ export function deleteTokenRow(db: Db, id: number): void {
 
 export function deleteTokensByBoard(db: Db, boardId: number): void {
   db.delete(tokens).where(eq(tokens.boardId, boardId)).run();
-}
-
-/* -------------------------------- initiative ------------------------------- */
-
-export function parseInitiative(raw: string): InitiativeEntry[] {
-  try {
-    const parsed = JSON.parse(raw) as InitiativeEntry[];
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (e) =>
-        typeof e?.tokenId === "number" &&
-        typeof e?.value === "number" &&
-        Number.isInteger(e.tokenId) &&
-        Number.isInteger(e.value),
-    );
-  } catch {
-    return [];
-  }
-}
-
-export function setBoardInitiative(
-  db: Db,
-  boardId: number,
-  entries: InitiativeEntry[],
-): void {
-  db.update(boards)
-    .set({ initiative: JSON.stringify(entries), updatedAt: Date.now() })
-    .where(eq(boards.id, boardId))
-    .run();
 }
