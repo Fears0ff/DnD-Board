@@ -1,0 +1,73 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* deep olive / charcoal */
+    --background: 30 9% 9%; /* #191715 */
+    --foreground: 43 42% 90%; /* #F4ECD8 parchment */
+    --card: 28 13% 15%; /* #2A2520 */
+    --card-foreground: 43 42% 90%;
+    --popover: 28 13% 15%;
+    --popover-foreground: 43 42% 90%;
+    --primary: 44 100% 60%; /* #ffca34 golden */
+    --primary-foreground: 30 12% 10%;
+    --secondary: 30 10% 20%;
+    --secondary-foreground: 43 42% 90%;
+    --muted: 30 10% 17%;
+    --muted-foreground: 40 14% 60%;
+    --accent: 30 12% 22%;
+    --accent-foreground: 43 42% 92%;
+    --destructive: 4 63% 48%;
+    --destructive-foreground: 43 42% 92%;
+    --border: 30 9% 24%;
+    --input: 30 9% 27%;
+    --ring: 44 100% 60%;
+    --radius: 0.375rem;
+    --sidebar-background: 28 13% 13%;
+    --sidebar-foreground: 43 42% 90%;
+    --sidebar-primary: 44 100% 60%;
+    --sidebar-primary-foreground: 30 12% 10%;
+    --sidebar-accent: 30 12% 22%;
+    --sidebar-accent-foreground: 43 42% 92%;
+    --sidebar-border: 30 9% 24%;
+    --sidebar-ring: 44 100% 60%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+    overscroll-behavior: none;
+    /* subtle paper/noise texture over the charcoal base */
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.05'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+  ::selection {
+    background: hsl(var(--primary) / 0.35);
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+}
+
+@layer components {
+  /* shared micro-interactions: 200ms color hovers, thin borders, small radius */
+  .ui-hover {
+    @apply transition-colors duration-200;
+  }
+  .panel {
+    @apply rounded-md border bg-card text-card-foreground;
+  }
+}
