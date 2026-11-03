@@ -23,131 +23,182 @@ import { log } from "../lib/logger";
  * `createGameHub` returns plain functions so the hub can be attached to any
  * Node HTTP server's "upgrade" event (production runtime, tests, Electron).
  */
+
 export interface GameHub {
-  handleUpgrade: (req: IncomingMessage, socket: Duplex, head: Buffer) => void;
-  publish: (event: WsServerEvent) => void;
-  /** For tests: how many clients are currently attached. */
+  /** Attach as: server.on("upgrade", hub.handleUpgrade) */
+  handleUpgrade: (
+    req: IncomingMessage,
+    socket: Duplex,
+    head: Buffer,
+  ) => void;
+  broadcastGameChanged: (revision: number) => void;
+  broadcastCompendiumChanged: (revision: number) => void;
   clientCount: () => number;
   close: () => void;
 }
 
-const CLEAN_SHUTDOWN_CODE = 1012; // service restart → client should retry
+function rejectUpgrade(socket: Duplex, status: number, reason: string): void {
+  try {
+    socket.write(
+      `HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`,
+    );
+  } finally {
+    socket.destroy();
+  }
+}
 
-export function createGameHub(): GameHub {
+function isOriginAllowed(req: IncomingMessage): boolean {
+  const origin = req.headers.origin;
+  if (!origin) return true; // non-browser clients; cookie auth still applies
+  try {
+    return new URL(origin).host === req.headers.host;
+  } catch {
+    return false;
+  }
+}
+
+export interface CreateGameHubOptions {
+  heartbeatIntervalMs?: number;
+}
+
+export function createGameHub(
+  options: CreateGameHubOptions = {},
+): GameHub {
+  const heartbeatMs =
+    options.heartbeatIntervalMs ?? WS_HEARTBEAT_INTERVAL_MS;
   const wss = new WebSocketServer({ noServer: true });
-  let closed = false;
+  const alive = new WeakSet<WebSocket>();
 
-  const interval = setInterval(() => {
+  wss.on("connection", (ws) => {
+    alive.add(ws);
+    ws.on("pong", () => alive.add(ws));
+    ws.on("error", () => {
+      // a broken client socket must not take the hub down
+    });
+  });
+
+  const heartbeat = setInterval(() => {
     for (const ws of wss.clients) {
-      const socket = ws as WebSocket & { isAlive?: boolean };
-      if (socket.isAlive === false) {
-        socket.terminate();
+      if (!alive.has(ws)) {
+        ws.terminate();
         continue;
       }
-      socket.isAlive = false;
-      socket.ping();
+      alive.delete(ws);
+      try {
+        ws.ping();
+      } catch {
+        ws.terminate();
+      }
     }
-  }, WS_HEARTBEAT_INTERVAL_MS);
-  interval.unref();
+  }, heartbeatMs);
+  heartbeat.unref?.();
+
+  async function authorize(req: IncomingMessage): Promise<number | null> {
+    const token = readCookie(req.headers.cookie, SESSION_COOKIE);
+    if (!token) return null;
+    const session = await verifySessionToken(token);
+    if (!session) return null;
+    // Role and existence come from the DB at connect time, not the token.
+    const user = findUserById(getDb(), session.userId);
+    return user ? user.id : null;
+  }
 
   function handleUpgrade(
     req: IncomingMessage,
     socket: Duplex,
     head: Buffer,
   ): void {
-    let pathname = "";
+    let pathname: string;
     try {
       pathname = new URL(req.url ?? "/", "http://localhost").pathname;
     } catch {
-      socket.destroy();
+      rejectUpgrade(socket, 400, "Bad Request");
       return;
     }
     if (pathname !== WS_PATH) {
-      socket.destroy();
+      rejectUpgrade(socket, 404, "Not Found");
       return;
     }
-
-    // Origin allow-list: only same-host origins may open the socket.
-    const origin = req.headers.origin;
-    if (origin) {
-      let originHost = "";
-      try {
-        originHost = new URL(origin).host;
-      } catch {
-        socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
-        socket.destroy();
-        return;
-      }
-      if (originHost !== req.headers.host) {
-        socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
-        socket.destroy();
-        return;
-      }
+    if (!isOriginAllowed(req)) {
+      rejectUpgrade(socket, 403, "Forbidden");
+      return;
     }
-
-    void (async () => {
-      const token = readCookie(req.headers.cookie, SESSION_COOKIE);
-      const session = token ? await verifySessionToken(token) : null;
-      const user = session ? findUserById(getDb(), session.userId) : undefined;
-      if (!user) {
-        socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
-        socket.destroy();
-        return;
-      }
-      wss.handleUpgrade(req, socket, head, (ws) => {
-        wss.emit("connection", ws, req, user.id);
+    authorize(req)
+      .then((userId) => {
+        if (userId === null) {
+          rejectUpgrade(socket, 401, "Unauthorized");
+          return;
+        }
+        wss.handleUpgrade(req, socket, head, (ws) => {
+          wss.emit("connection", ws, req);
+        });
+      })
+      .catch((err) => {
+        log.error("ws upgrade authorization failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        rejectUpgrade(socket, 500, "Internal Server Error");
       });
-    })().catch(() => {
-      socket.destroy();
-    });
   }
 
-  wss.on("connection", (ws: WebSocket & { isAlive?: boolean }, _req, userId) => {
-    ws.isAlive = true;
-    ws.on("pong", () => {
-      ws.isAlive = true;
-    });
-    ws.on("error", () => {
-      ws.close();
-    });
-    log.debug("ws client connected", { userId });
-  });
-
-  function publish(event: WsServerEvent): void {
+  function broadcast(event: WsServerEvent): void {
     const payload = JSON.stringify(event);
-    for (const client of wss.clients) {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(payload);
+    for (const ws of wss.clients) {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(payload);
       }
     }
   }
 
   return {
     handleUpgrade,
-    publish,
+    broadcastGameChanged: (revision) =>
+      broadcast({ type: "game.changed", revision }),
+    broadcastCompendiumChanged: (revision) =>
+      broadcast({ type: "compendium.changed", revision }),
     clientCount: () => wss.clients.size,
     close: () => {
-      if (closed) return;
-      closed = true;
-      clearInterval(interval);
-      for (const client of wss.clients) {
-        client.close(CLEAN_SHUTDOWN_CODE, "server shutdown");
-      }
+      clearInterval(heartbeat);
+      for (const ws of wss.clients) ws.terminate();
       wss.close();
     },
   };
 }
 
-/* ------------------------- module-level convenience ------------------------ */
+/* ---------------------------------------------------------------------------
+ * Publish-after-commit registry.
+ *
+ * Services bump a revision inside a transaction and call publish* AFTER the
+ * transaction commits. When no hub is registered (unit tests, CLI scripts)
+ * publishing is a no-op.
+ * ------------------------------------------------------------------------- */
 
-let defaultHub: GameHub | null = null;
+let activeHub: GameHub | null = null;
 
-/** Called by the runtime once it owns the hub; tests pass null to isolate. */
 export function registerHub(hub: GameHub | null): void {
-  defaultHub = hub;
+  activeHub = hub;
 }
 
-/** Publish-after-commit helper for services; safe when no hub is attached. */
+export function getHub(): GameHub | null {
+  return activeHub;
+}
+
 export function publishGameChanged(revision: number): void {
-  defaultHub?.publish({ type: "game.changed", revision });
+  try {
+    activeHub?.broadcastGameChanged(revision);
+  } catch (err) {
+    log.warn("failed to broadcast game.changed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+export function publishCompendiumChanged(revision: number): void {
+  try {
+    activeHub?.broadcastCompendiumChanged(revision);
+  } catch (err) {
+    log.warn("failed to broadcast compendium.changed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
