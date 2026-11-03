@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  check,
   index,
   integer,
   real,
@@ -9,18 +10,29 @@ import {
 } from "drizzle-orm/sqlite-core";
 
 /**
- * Declarative Drizzle mirror of the embedded migrations (db/migrations/*.ts).
- * The migrations are the source of truth for what runs at boot; this file
- * gives the ORM typed access and lets drizzle-kit diff future changes.
- * Keep the two in sync when adding tables/columns.
+ * DnD Board schema (SQLite / better-sqlite3).
+ *
+ * There is intentionally no `tables` entity: one installation holds exactly
+ * one game space. Timestamps are stored as integer unix milliseconds and are
+ * exposed through the API as ISO strings (mapping happens in repositories).
+ * JSON columns are used only for variable-structure payloads (character sheet,
+ * compendium card data, per-board initiative list); everything that takes
+ * part in rights, relations or invariants is a real column.
+ *
+ * The DDL source of truth that is actually applied at runtime lives in
+ * db/migrations/*.ts (embedded SQL, so it survives the esbuild server bundle).
+ * Keep this file and those migrations in sync; drizzle-kit can diff/generate
+ * against this schema via drizzle.config.ts.
  */
 
-/* ---------------------------------- users ---------------------------------- */
+const createdAt = () => integer("created_at").notNull();
+const updatedAt = () => integer("updated_at").notNull();
 
 export const users = sqliteTable(
   "users",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
+    // Technical identity for the platform adapter: local:<loginNormalized>.
     unionId: text("union_id").notNull().unique(),
     loginNormalized: text("login_normalized").notNull().unique(),
     displayName: text("display_name").notNull(),
@@ -28,14 +40,13 @@ export const users = sqliteTable(
     gameRole: text("game_role", { enum: ["master", "player"] })
       .notNull()
       .default("player"),
-    createdAt: integer("created_at").notNull(),
-    updatedAt: integer("updated_at").notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
   },
-  (t) => [
-    sql`CHECK (${t.gameRole} IN ('master','player'))`,
-  ],
+  (t) => [check("users_game_role", sql`${t.gameRole} IN ('master','player')`)],
 );
 
+/** Singleton row (id = 1) holding monotonically increasing state revisions. */
 export const appMeta = sqliteTable(
   "app_meta",
   {
@@ -43,14 +54,13 @@ export const appMeta = sqliteTable(
     gameRevision: integer("game_revision").notNull().default(0),
     compendiumRevision: integer("compendium_revision").notNull().default(0),
   },
-  (t) => [sql`CHECK (${t.id} = 1)`],
+  (t) => [check("app_meta_singleton", sql`${t.id} = 1`)],
 );
-
-/* ------------------------------- media assets ------------------------------ */
 
 export const mediaAssets = sqliteTable(
   "media_assets",
   {
+    // Storage key, doubles as the object-store key. The only string PK.
     key: text("key").primaryKey(),
     backend: text("backend", { enum: ["local", "platform"] }).notNull(),
     uploadedBy: integer("uploaded_by")
@@ -58,38 +68,45 @@ export const mediaAssets = sqliteTable(
       .references(() => users.id),
     mime: text("mime").notNull(),
     size: integer("size").notNull(),
-    createdAt: integer("created_at").notNull(),
+    createdAt: createdAt(),
   },
-  (t) => [index("media_assets_uploaded_by_idx").on(t.uploadedBy)],
+  (t) => [
+    check("media_backend", sql`${t.backend} IN ('local','platform')`),
+    index("media_assets_uploaded_by_idx").on(t.uploadedBy),
+  ],
 );
-
-/* ---------------------------------- boards --------------------------------- */
 
 export const boards = sqliteTable(
   "boards",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
     name: text("name").notNull(),
-    backgroundKey: text("background_key").references(() => mediaAssets.key, {
-      onDelete: "set null",
-    }),
+    backgroundKey: text("background_key").references(
+      () => mediaAssets.key,
+      { onDelete: "set null" },
+    ),
     cellSize: integer("cell_size").notNull().default(64),
     gridWidth: integer("grid_width").notNull().default(30),
     gridHeight: integer("grid_height").notNull().default(20),
-    /** JSON-serialized initiative list; v1 stores manual entries. */
+    // JSON array of { tokenId, value } for this board.
     initiative: text("initiative").notNull().default("[]"),
-    isActive: integer("is_active", { mode: "boolean" }).notNull().default(false),
-    createdAt: integer("created_at").notNull(),
-    updatedAt: integer("updated_at").notNull(),
+    isActive: integer("is_active", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
   },
   (t) => [
-    // At most one active board (partial unique index).
-    uniqueIndex("boards_single_active").on(t.isActive).where(sql`${t.isActive} = 1`),
-    sql`CHECK (${t.gridWidth} BETWEEN 1 AND 500 AND ${t.gridHeight} BETWEEN 1 AND 500 AND ${t.cellSize} BETWEEN 4 AND 1024)`,
+    // Invariant: at most one active board.
+    uniqueIndex("boards_single_active")
+      .on(t.isActive)
+      .where(sql`${t.isActive} = 1`),
+    check(
+      "boards_grid_bounds",
+      sql`${t.gridWidth} BETWEEN 1 AND 500 AND ${t.gridHeight} BETWEEN 1 AND 500 AND ${t.cellSize} BETWEEN 4 AND 1024`,
+    ),
   ],
 );
-
-/* -------------------------------- characters ------------------------------- */
 
 export const characters = sqliteTable(
   "characters",
@@ -99,16 +116,15 @@ export const characters = sqliteTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
-    /** JSON blob with character-sheet fields. */
+    // JSON character sheet including its sheetVersion.
     data: text("data").notNull(),
+    // Optimistic concurrency version.
     version: integer("version").notNull().default(1),
-    createdAt: integer("created_at").notNull(),
-    updatedAt: integer("updated_at").notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
   },
   (t) => [index("characters_owner_idx").on(t.ownerId)],
 );
-
-/* -------------------------------- compendium ------------------------------- */
 
 export const compendiumItems = sqliteTable(
   "compendium_items",
@@ -128,19 +144,23 @@ export const compendiumItems = sqliteTable(
     }).notNull(),
     name: text("name").notNull(),
     source: text("source").notNull().default(""),
-    isMagic: integer("is_magic", { mode: "boolean" }).notNull().default(false),
+    isMagic: integer("is_magic", { mode: "boolean" })
+      .notNull()
+      .default(false),
     visibility: text("visibility", { enum: ["private", "shared"] })
       .notNull()
       .default("private"),
+    // NULL only for imported shared cards.
     createdBy: integer("created_by").references(() => users.id, {
       onDelete: "set null",
     }),
     imageKey: text("image_key").references(() => mediaAssets.key, {
       onDelete: "set null",
     }),
+    // JSON payload of the concrete card type.
     data: text("data").notNull(),
-    createdAt: integer("created_at").notNull(),
-    updatedAt: integer("updated_at").notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
   },
   (t) => [
     index("compendium_type_idx").on(t.type),
@@ -148,8 +168,6 @@ export const compendiumItems = sqliteTable(
     index("compendium_created_by_idx").on(t.createdBy),
   ],
 );
-
-/* ---------------------------------- tokens --------------------------------- */
 
 export const tokens = sqliteTable(
   "tokens",
@@ -168,33 +186,40 @@ export const tokens = sqliteTable(
     characterId: integer("character_id").references(() => characters.id, {
       onDelete: "set null",
     }),
-    compendiumId: integer("compendium_id").references(() => compendiumItems.id, {
-      onDelete: "set null",
-    }),
+    compendiumId: integer("compendium_id").references(
+      () => compendiumItems.id,
+      { onDelete: "set null" },
+    ),
     cellX: integer("cell_x").notNull().default(0),
     cellY: integer("cell_y").notNull().default(0),
     hp: integer("hp").notNull().default(0),
     maxHp: integer("max_hp").notNull().default(0),
-    /** Token footprint in grid squares. */
+    // Token footprint in grid squares.
     size: real("size").notNull().default(1),
     imageKey: text("image_key").references(() => mediaAssets.key, {
       onDelete: "set null",
     }),
-    createdAt: integer("created_at").notNull(),
-    updatedAt: integer("updated_at").notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
   },
   (t) => [
     index("tokens_board_idx").on(t.boardId),
     index("tokens_owner_idx").on(t.ownerId),
-    sql`CHECK (${t.hp} >= 0 AND ${t.maxHp} >= 0 AND ${t.hp} <= ${t.maxHp})`,
-    // A token links to either a character or a compendium entry, never both.
-    sql`CHECK (NOT (${t.characterId} IS NOT NULL AND ${t.compendiumId} IS NOT NULL))`,
-    // Compendium-linked tokens inherit the entry's image, no override allowed.
-    sql`CHECK (NOT (${t.compendiumId} IS NOT NULL AND ${t.imageKey} IS NOT NULL))`,
+    check(
+      "tokens_hp_bounds",
+      sql`${t.hp} >= 0 AND ${t.maxHp} >= 0 AND ${t.hp} <= ${t.maxHp}`,
+    ),
+    check(
+      "tokens_refs_exclusive",
+      sql`NOT (${t.characterId} IS NOT NULL AND ${t.compendiumId} IS NOT NULL)`,
+    ),
+    // A compendium-bound token takes its image from the card.
+    check(
+      "tokens_compendium_image",
+      sql`NOT (${t.compendiumId} IS NOT NULL AND ${t.imageKey} IS NOT NULL)`,
+    ),
   ],
 );
-
-/* ----------------------------------- notes --------------------------------- */
 
 export const notes = sqliteTable(
   "notes",
@@ -206,18 +231,17 @@ export const notes = sqliteTable(
     title: text("title").notNull(),
     content: text("content").notNull().default(""),
     version: integer("version").notNull().default(1),
-    createdAt: integer("created_at").notNull(),
-    updatedAt: integer("updated_at").notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
   },
   (t) => [index("notes_user_idx").on(t.userId)],
 );
 
-/* ---------------------------------- helpers -------------------------------- */
-
 export type UserRow = typeof users.$inferSelect;
 export type BoardRow = typeof boards.$inferSelect;
 export type TokenRow = typeof tokens.$inferSelect;
+export type AppMetaRow = typeof appMeta.$inferSelect;
 export type CharacterRow = typeof characters.$inferSelect;
 export type CompendiumItemRow = typeof compendiumItems.$inferSelect;
-export type MediaAssetRow = typeof mediaAssets.$inferSelect;
 export type NoteRow = typeof notes.$inferSelect;
+export type MediaAssetRow = typeof mediaAssets.$inferSelect;

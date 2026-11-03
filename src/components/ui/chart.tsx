@@ -92,7 +92,6 @@ ${colorConfig
       itemConfig.color
     return color ? `  --color-${key}: ${color};` : null
   })
-  .filter(Boolean)
   .join("\n")}
 }
 `
@@ -329,15 +328,18 @@ function getPayloadConfigFromPayload(
   let configLabelKey: string = key
 
   if (
-    key in config ||
-    (payloadPayload && configLabelKey in payloadPayload)
+    key in payload &&
+    typeof payload[key as keyof typeof payload] === "string"
   ) {
-    configLabelKey = key in config ? key : configLabelKey
+    configLabelKey = payload[key as keyof typeof payload] as string
   } else if (
     payloadPayload &&
-    key in payloadPayload
+    key in payloadPayload &&
+    typeof payloadPayload[key as keyof typeof payloadPayload] === "string"
   ) {
-    configLabelKey = key
+    configLabelKey = payloadPayload[
+      key as keyof typeof payloadPayload
+    ] as string
   }
 
   return configLabelKey in config

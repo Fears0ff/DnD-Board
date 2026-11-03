@@ -1,7 +1,11 @@
-import { useCallback, useMemo, useState } from "react";
-import { api, gameStateKey, reportMutationError } from "@/lib/api";
-import { queryClient } from "@/providers/trpc";
-import { useGameSync } from "@/hooks/useGameSync";
+import { useMemo, useState } from "react";
+import { Map as MapIcon, Pencil, Plus, X } from "lucide-react";
+import { toast } from "sonner";
+import { api, invalidateGameState, trpcErrorMessage } from "@/lib/api";
+import {
+  TOKEN_KIND_LABELS,
+  type TokenDto,
+} from "@/lib/game-contract";
 import {
   applyPendingMoves,
   clearPendingMove,
@@ -9,246 +13,212 @@ import {
   setPendingMove,
   type PendingMoves,
 } from "@/lib/pendingMoves";
-import { log } from "@/lib/logger";
-import type {
-  BoardDto,
-  GameStateDto,
-  InitiativeEntry,
-  TokenAddInput,
-  TokenUpdateInput,
-} from "@/lib/game-contract";
+import { useGameSync } from "@/hooks/useGameSync";
 import { BoardCanvas } from "@/components/board/BoardCanvas";
-import { GameHeader } from "./GameHeader";
-import { InitiativePanel } from "./InitiativePanel";
-import { TokenDialog } from "./TokenDialog";
-import { UsersDialog } from "./UsersDialog";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { FullScreenError, FullScreenLoader } from "./FullScreenState";
-import { toast } from "sonner";
-
-interface TokenDialogState {
-  mode: "add" | "edit";
-  tokenId?: number;
-}
+import { GameHeader } from "./GameHeader";
+import { UsersDialog } from "./UsersDialog";
+import { TokenDialog, type TokenDialogState } from "./TokenDialog";
+import { InitiativePanel } from "./InitiativePanel";
 
 export function Game() {
   const { query, wsStatus } = useGameSync(true);
-  const state = query.data;
+  const data = query.data;
 
+  const [gridOn, setGridOn] = useState(true);
+  const [selectedTokenId, setSelectedTokenId] = useState<number | null>(null);
   const [pendingMoves, setPendingMoves] = useState<PendingMoves>(EMPTY_PENDING_MOVES);
+  const [tokenDialog, setTokenDialog] = useState<TokenDialogState>(null);
+  const [initiativeOpen, setInitiativeOpen] = useState(false);
   const [usersOpen, setUsersOpen] = useState(false);
-  const [tokenDialog, setTokenDialog] = useState<TokenDialogState | null>(null);
 
-  const invalidateGame = useCallback(
-    () => queryClient.invalidateQueries({ queryKey: [...gameStateKey] }),
-    [],
+  const moveMutation = api.tokens.move.useMutation();
+  const updateMutation = api.tokens.update.useMutation();
+  const createBoardMutation = api.boards.create.useMutation();
+
+  const isMaster = data?.me.gameRole === "master";
+
+  // выбранный токен мог быть удалён другим участником: инспектор и подсветка
+  // вычисляются по факту наличия id в актуальном снимке, устаревший id безвреден
+  const displayTokens = useMemo(
+    () => (data ? applyPendingMoves(data.tokens, pendingMoves) : []),
+    [data, pendingMoves],
+  );
+  const pendingTokenIds = useMemo(
+    () => new Set(Object.keys(pendingMoves).map(Number)),
+    [pendingMoves],
   );
 
-  /* ------------------------------- mutations ------------------------------ */
+  /**
+   * Drag завершён: одна мутация, локальная позиция pending до settle.
+   * Ошибка — откат к серверному снимку (pending снимается) и перечитывание.
+   */
+  const handleTokenDrop = (token: TokenDto, cellX: number, cellY: number) => {
+    setPendingMoves((s) => setPendingMove(s, token.id, cellX, cellY));
+    const options = {
+      onSuccess: () => invalidateGameState(),
+      onError: (err: unknown) => {
+        toast.error(trpcErrorMessage(err, "Не удалось переместить токен"));
+        invalidateGameState();
+      },
+      onSettled: () => setPendingMoves((s) => clearPendingMove(s, token.id)),
+    };
+    if (isMaster) {
+      updateMutation.mutate({ id: token.id, cellX, cellY }, options);
+    } else {
+      moveMutation.mutate({ tokenId: token.id, cellX, cellY }, options);
+    }
+  };
 
-  const onMutationError = reportMutationError("board mutation");
-
-  const createBoard = api.boards.create.useMutation({
-    onSuccess: () => void invalidateGame(),
-    onError: onMutationError,
-  });
-  const renameBoard = api.boards.rename.useMutation({
-    onSuccess: () => void invalidateGame(),
-    onError: onMutationError,
-  });
-  const removeBoard = api.boards.remove.useMutation({
-    onSuccess: () => void invalidateGame(),
-    onError: onMutationError,
-  });
-  const setActiveBoard = api.boards.setActive.useMutation({
-    onSuccess: () => void invalidateGame(),
-    onError: onMutationError,
-  });
-
-  const addToken = api.tokens.add.useMutation({
-    onSuccess: () => void invalidateGame(),
-    onError: onMutationError,
-  });
-  const updateToken = api.tokens.update.useMutation({
-    onSuccess: () => void invalidateGame(),
-    onError: onMutationError,
-  });
-  const removeToken = api.tokens.remove.useMutation({
-    onSuccess: () => void invalidateGame(),
-    onError: onMutationError,
-  });
-  const clearTokens = api.tokens.clear.useMutation({
-    onSuccess: () => void invalidateGame(),
-    onError: onMutationError,
-  });
-  const setInitiative = api.initiative.set.useMutation({
-    onSuccess: () => void invalidateGame(),
-    onError: onMutationError,
-  });
-
-  const moveToken = api.tokens.move.useMutation();
-
-  const anyPending =
-    createBoard.isPending ||
-    renameBoard.isPending ||
-    removeBoard.isPending ||
-    setActiveBoard.isPending ||
-    addToken.isPending ||
-    updateToken.isPending ||
-    removeToken.isPending ||
-    clearTokens.isPending ||
-    setInitiative.isPending;
-
-  /* ------------------------------ token moves ----------------------------- */
-
-  const tokens = useMemo(
-    () => (state ? applyPendingMoves(state.tokens, pendingMoves) : []),
-    [state, pendingMoves],
-  );
-
-  const handleTokenMove = useCallback(
-    (tokenId: number, cellX: number, cellY: number) => {
-      const snapshot = queryClient.getQueryData<GameStateDto>([...gameStateKey]);
-      const serverToken = snapshot?.tokens.find((t) => t.id === tokenId);
-      if (!serverToken) return;
-      if (serverToken.cellX === cellX && serverToken.cellY === cellY) return;
-
-      setPendingMoves((prev) => setPendingMove(prev, tokenId, cellX, cellY));
-      moveToken.mutate(
-        { tokenId, cellX, cellY },
-        {
-          onSuccess: () => {
-            setPendingMoves((prev) => clearPendingMove(prev, tokenId));
-            void invalidateGame();
-          },
-          onError: (error) => {
-            setPendingMoves((prev) => clearPendingMove(prev, tokenId));
-            log.error("token move failed", { tokenId, error: String(error) });
-            toast.error("Не удалось переместить токен");
-            void invalidateGame();
-          },
-        },
-      );
-    },
-    [moveToken, invalidateGame],
-  );
-
-  /* -------------------------------- render -------------------------------- */
-
-  if (query.isLoading) return <FullScreenLoader label="Загрузка поля…" />;
-  if (query.isError || !state) {
+  if (query.isLoading) {
+    return <FullScreenLoader label="Загрузка игры…" />;
+  }
+  if (query.isError || !data) {
     return (
       <FullScreenError
-        title="Не удалось загрузить игровое поле"
+        title="Не удалось загрузить состояние игры"
+        message={trpcErrorMessage(query.error, "Проверьте соединение с сервером")}
         onRetry={() => void query.refetch()}
       />
     );
   }
 
-  const me = state.me;
-  const isMaster = me.gameRole === "master";
-  const activeBoard: BoardDto | null = state.activeBoard;
-  const boards: BoardDto[] = state.boards;
-  const initiative: InitiativeEntry[] = state.initiative;
-
-  const editingToken =
-    tokenDialog?.mode === "edit"
-      ? tokens.find((t) => t.id === tokenDialog.tokenId) ?? null
-      : null;
-
-  const handleAddBoard = (name: string) => {
-    createBoard.mutate({ name });
-  };
-  const handleRenameBoard = (id: number, name: string) => {
-    renameBoard.mutate({ id, name });
-  };
-  const handleRemoveBoard = (id: number) => {
-    removeBoard.mutate({ id });
-  };
-  const handleSetActive = (id: number) => {
-    setActiveBoard.mutate({ id });
-  };
-
-  const handleTokenDialogSubmit = (values: TokenAddInput | (TokenUpdateInput & { id: number })) => {
-    if (tokenDialog?.mode === "edit" && "id" in values) {
-      updateToken.mutate(values, { onSuccess: () => setTokenDialog(null) });
-    } else {
-      addToken.mutate(values as TokenAddInput, { onSuccess: () => setTokenDialog(null) });
-    }
-  };
-
-  const handleInitiativeChange = (entries: InitiativeEntry[]) => {
-    setInitiative.mutate({ entries });
-  };
+  const board = data.activeBoard;
+  const selectedToken = selectedTokenId !== null
+    ? displayTokens.find((t) => t.id === selectedTokenId) ?? null
+    : null;
 
   return (
-    <div className="flex h-screen flex-col" data-testid="game-root">
+    <div className="flex h-full min-h-screen flex-col">
       <GameHeader
-        me={me}
-        boards={boards}
-        activeBoard={activeBoard}
+        me={data.me}
+        boards={data.boards}
+        activeBoard={board}
+        isMaster={!!isMaster}
+        gridOn={gridOn}
+        onGridChange={setGridOn}
         wsStatus={wsStatus}
-        busy={anyPending}
-        onAddBoard={isMaster ? handleAddBoard : undefined}
-        onRenameBoard={isMaster ? handleRenameBoard : undefined}
-        onRemoveBoard={isMaster ? handleRemoveBoard : undefined}
-        onSetActiveBoard={isMaster ? handleSetActive : undefined}
-        onOpenUsers={isMaster ? () => setUsersOpen(true) : undefined}
+        onAddToken={() => setTokenDialog({ mode: "add" })}
+        onOpenInitiative={() => setInitiativeOpen(true)}
+        onOpenUsers={() => setUsersOpen(true)}
       />
 
-      <div className="flex min-h-0 flex-1">
-        <main className="relative min-w-0 flex-1">
-          {activeBoard ? (
-            <BoardCanvas
-              board={activeBoard}
-              tokens={tokens}
-              isMaster={isMaster}
-              myUserId={me.id}
-              busy={anyPending}
-              onTokenMove={handleTokenMove}
-              onAddToken={isMaster ? () => setTokenDialog({ mode: "add" }) : undefined}
-              onEditToken={
-                isMaster ? (id) => setTokenDialog({ mode: "edit", tokenId: id }) : undefined
-              }
-              onRemoveToken={isMaster ? (id) => removeToken.mutate({ id }) : undefined}
-              onClearTokens={
-                isMaster ? () => clearTokens.mutate({ boardId: activeBoard.id }) : undefined
-              }
-            />
-          ) : (
-            <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-              <p className="text-sm text-muted-foreground">
+      {wsStatus !== "open" ? (
+        <div className="flex h-7 shrink-0 items-center justify-center border-b bg-secondary/70 px-3 text-[11px] text-muted-foreground">
+          {wsStatus === "connecting"
+            ? "Подключение к серверу…"
+            : "Realtime-соединение потеряно — данные обновляются опросом каждые 4 с, переподключение выполняется автоматически"}
+        </div>
+      ) : null}
+
+      <main className="relative min-h-0 flex-1">
+        {board ? (
+          <BoardCanvas
+            board={board}
+            tokens={displayTokens}
+            meId={data.me.id}
+            isMaster={!!isMaster}
+            showGrid={gridOn}
+            selectedTokenId={selectedTokenId}
+            pendingTokenIds={pendingTokenIds}
+            onSelectToken={setSelectedTokenId}
+            onTokenDrop={handleTokenDrop}
+            onEditToken={(t) => setTokenDialog({ mode: "edit", token: t })}
+          />
+        ) : (
+          <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
+            <MapIcon className="size-10 text-muted-foreground" />
+            <div className="space-y-1">
+              <p className="text-sm font-medium">Игровое поле не создано</p>
+              <p className="max-w-sm text-xs text-muted-foreground">
                 {isMaster
-                  ? "Создайте первую доску, чтобы начать."
-                  : "Мастер ещё не создал доску. Ожидайте."}
+                  ? "Создайте первое поле — оно сразу станет активным для всех участников."
+                  : "Мастер ещё не создал игровое поле. Страница обновится автоматически."}
               </p>
             </div>
-          )}
-        </main>
+            {isMaster ? (
+              <Button
+                size="sm"
+                className="ui-hover gap-1.5 text-xs"
+                disabled={createBoardMutation.isPending}
+                onClick={() =>
+                  createBoardMutation.mutate(
+                    {
+                      name: `Поле ${data.boards.length + 1}`,
+                      gridWidth: 24,
+                      gridHeight: 16,
+                    },
+                    {
+                      onSuccess: () => invalidateGameState(),
+                      onError: (e) => toast.error(trpcErrorMessage(e, "Не удалось создать поле")),
+                    },
+                  )
+                }
+              >
+                <Plus className="size-3.5" /> Создать поле
+              </Button>
+            ) : null}
+          </div>
+        )}
 
-        {activeBoard ? (
-          <InitiativePanel
-            tokens={tokens}
-            initiative={initiative}
-            isMaster={isMaster}
-            busy={anyPending}
-            onChange={isMaster ? handleInitiativeChange : undefined}
-          />
+        {board && selectedToken ? (
+          <div
+            data-testid="token-inspector"
+            className="panel absolute bottom-3 left-3 flex max-w-xs items-center gap-3 px-3 py-2 shadow-sm"
+          >
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="truncate text-xs font-medium">{selectedToken.label}</span>
+                <Badge variant="secondary" className="px-1 text-[10px]">
+                  {TOKEN_KIND_LABELS[selectedToken.kind]}
+                </Badge>
+              </div>
+              <p className="mt-0.5 text-[11px] text-muted-foreground">
+                HP {selectedToken.hp}/{selectedToken.maxHp} · клетка ({selectedToken.cellX}; {selectedToken.cellY})
+                {selectedToken.ownerId === data.me.id ? " · ваш" : ""}
+              </p>
+            </div>
+            {isMaster ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className="ui-hover h-7 gap-1 text-[11px]"
+                onClick={() => setTokenDialog({ mode: "edit", token: selectedToken })}
+              >
+                <Pencil className="size-3" /> Изменить
+              </Button>
+            ) : null}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="ui-hover h-7 w-7 p-0"
+              onClick={() => setSelectedTokenId(null)}
+              aria-label="Закрыть"
+            >
+              <X className="size-3.5" />
+            </Button>
+          </div>
         ) : null}
-      </div>
+      </main>
 
-      {tokenDialog ? (
-        <TokenDialog
-          mode={tokenDialog.mode}
-          token={editingToken}
-          open
-          pending={addToken.isPending || updateToken.isPending}
-          onClose={() => setTokenDialog(null)}
-          onSubmit={handleTokenDialogSubmit}
+      {isMaster && tokenDialog && board ? (
+        <TokenDialog state={tokenDialog} board={board} onClose={() => setTokenDialog(null)} />
+      ) : null}
+
+      {board ? (
+        <InitiativePanel
+          open={initiativeOpen}
+          onOpenChange={setInitiativeOpen}
+          tokens={data.tokens}
+          initiative={data.initiative}
+          isMaster={!!isMaster}
         />
       ) : null}
 
       {isMaster ? (
-        <UsersDialog open={usersOpen} onOpenChange={setUsersOpen} myId={me.id} />
+        <UsersDialog open={usersOpen} onOpenChange={setUsersOpen} me={data.me} />
       ) : null}
     </div>
   );
