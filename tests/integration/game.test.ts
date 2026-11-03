@@ -5,266 +5,407 @@ import {
   registerUser,
   teardownTempDb,
   useTempDb,
+  type RegisteredUser,
   type TestDb,
 } from "./helpers";
 
 let testDb: TestDb;
+let master: RegisteredUser;
+let player: RegisteredUser;
 
-beforeEach(() => {
+beforeEach(async () => {
   testDb = useTempDb();
+  master = await registerUser("dm-master");
+  player = await registerUser("pc-player");
 });
 
 afterEach(() => {
   teardownTempDb(testDb);
 });
 
-async function dmWithBoard() {
-  const dm = await registerUser("dm");
-  const ctx = await newContext(dm.cookie);
-  const { board } = await ctx.caller.boards.create({ name: "Board 1" });
-  return { dm, ctx, board };
+async function masterCaller() {
+  return (await newContext(master.cookie)).caller;
 }
 
-describe("boards", () => {
-  it("first board becomes active automatically", async () => {
-    const { ctx } = await dmWithBoard();
-    const state = await ctx.caller.game.state();
-    expect(state.boards).toHaveLength(1);
-    expect(state.activeBoard?.name).toBe("Board 1");
-    expect(state.boards[0].isActive).toBe(true);
-  });
+async function playerCaller() {
+  return (await newContext(player.cookie)).caller;
+}
 
-  it("board management is master-only", async () => {
-    await dmWithBoard();
-    const player = await registerUser("player1");
-    const asPlayer = await newContext(player.cookie);
-    await expectTrpcError(
-      asPlayer.caller.boards.create({ name: "Nope" }),
-      "FORBIDDEN",
-    );
-    await expectTrpcError(
-      asPlayer.caller.boards.setActive({ id: 1 }),
-      "FORBIDDEN",
-    );
+async function createBoard(name = "Dungeon") {
+  const caller = await masterCaller();
+  return caller.boards.create({ name, gridWidth: 20, gridHeight: 10 });
+}
+
+describe("game.state", () => {
+  it("requires authentication", async () => {
     const anon = await newContext();
+    await expectTrpcError(anon.caller.game.state(), "UNAUTHORIZED");
+  });
+
+  it("returns the snapshot shape for any signed-in user", async () => {
+    await createBoard();
+    const caller = await playerCaller();
+    const state = await caller.game.state();
+    expect(state.me.login).toBe("pc-player");
+    expect(state.revision).toBe(1);
+    expect(state.boards).toHaveLength(1);
+    expect(state.activeBoard?.name).toBe("Dungeon");
+    expect(state.tokens).toEqual([]);
+    expect(state.initiative).toEqual([]);
+  });
+});
+
+describe("boards", () => {
+  it("is master-only", async () => {
+    const caller = await playerCaller();
     await expectTrpcError(
-      anon.caller.boards.create({ name: "Nope" }),
-      "UNAUTHORIZED",
+      caller.boards.create({ name: "Nope" }),
+      "FORBIDDEN",
     );
   });
 
-  it("setActive switches the single active board", async () => {
-    const { ctx, board } = await dmWithBoard();
-    const second = await ctx.caller.boards.create({ name: "Board 2" });
-    await ctx.caller.boards.setActive({ id: second.board.id });
-    const state = await ctx.caller.game.state();
+  it("makes the first board active automatically and keeps a single active board", async () => {
+    const first = await createBoard("One");
+    const second = await createBoard("Two");
+    expect(first.board.isActive).toBe(true);
+    expect(second.board.isActive).toBe(false);
+
+    const caller = await masterCaller();
+    let state = await caller.game.state();
+    expect(state.boards.filter((b) => b.isActive)).toHaveLength(1);
+
+    await caller.boards.setActive({ id: second.board.id });
+    state = await caller.game.state();
+    const active = state.boards.filter((b) => b.isActive);
+    expect(active).toHaveLength(1);
+    expect(active[0].id).toBe(second.board.id);
     expect(state.activeBoard?.id).toBe(second.board.id);
-    expect(state.boards.find((b) => b.id === board.id)?.isActive).toBe(false);
   });
 
-  it("rename and remove work; removing the active board leaves none active", async () => {
-    const { ctx, board } = await dmWithBoard();
-    const renamed = await ctx.caller.boards.rename({
-      id: board.id,
-      name: "Renamed",
+  it("renames a board and bumps the revision", async () => {
+    const created = await createBoard("Old");
+    const caller = await masterCaller();
+    const renamed = await caller.boards.rename({
+      id: created.board.id,
+      name: "New",
     });
-    expect(renamed.board.name).toBe("Renamed");
-    await ctx.caller.boards.remove({ id: board.id });
-    const state = await ctx.caller.game.state();
+    expect(renamed.board.name).toBe("New");
+    expect(renamed.revision).toBeGreaterThan(created.revision);
+  });
+
+  it("activates another board in the same transaction when the active one is removed", async () => {
+    const first = await createBoard("One");
+    const second = await createBoard("Two");
+    const caller = await masterCaller();
+    await caller.boards.remove({ id: first.board.id });
+    const state = await caller.game.state();
+    expect(state.boards).toHaveLength(1);
+    expect(state.activeBoard?.id).toBe(second.board.id);
+    expect(state.activeBoard?.isActive).toBe(true);
+  });
+
+  it("allows removing the last board, leaving no active board", async () => {
+    const only = await createBoard("Only");
+    const caller = await masterCaller();
+    await caller.boards.remove({ id: only.board.id });
+    const state = await caller.game.state();
     expect(state.boards).toHaveLength(0);
     expect(state.activeBoard).toBeNull();
   });
 
-  it("every mutation bumps the revision", async () => {
-    const { ctx } = await dmWithBoard();
-    const r1 = (await ctx.caller.game.state()).revision;
-    await ctx.caller.boards.create({ name: "B2" });
-    const r2 = (await ctx.caller.game.state()).revision;
-    expect(r2).toBeGreaterThan(r1);
+  it("remove of a missing board is 404", async () => {
+    const caller = await masterCaller();
+    await expectTrpcError(caller.boards.remove({ id: 4242 }), "NOT_FOUND");
   });
 });
 
 describe("tokens", () => {
-  it("master can add, update, move and remove tokens", async () => {
-    const { ctx } = await dmWithBoard();
-    const { token } = await ctx.caller.tokens.add({
+  it("requires an active board and master rights for add", async () => {
+    const caller = await masterCaller();
+    await expectTrpcError(
+      caller.tokens.add({ kind: "hero", label: "A", hp: 5, maxHp: 10 }),
+      "NOT_FOUND",
+    );
+    await createBoard();
+    const asPlayer = await playerCaller();
+    await expectTrpcError(
+      asPlayer.tokens.add({ kind: "hero", label: "A", hp: 5, maxHp: 10 }),
+      "FORBIDDEN",
+    );
+  });
+
+  it("places a new token at the board center by default", async () => {
+    await createBoard();
+    const caller = await masterCaller();
+    const { token } = await caller.tokens.add({
+      kind: "monster",
+      label: "Goblin",
+      hp: 7,
+      maxHp: 7,
+    });
+    expect(token.cellX).toBe(10); // gridWidth 20 / 2
+    expect(token.cellY).toBe(5); // gridHeight 10 / 2
+    expect(token.ownerId).toBeNull();
+  });
+
+  it("rejects hp > maxHp", async () => {
+    await createBoard();
+    const caller = await masterCaller();
+    await expectTrpcError(
+      caller.tokens.add({ kind: "hero", label: "x", hp: 11, maxHp: 10 }),
+      "BAD_REQUEST",
+    );
+    const { token } = await caller.tokens.add({
       kind: "hero",
-      label: "Aria",
-      hp: 10,
-      maxHp: 12,
+      label: "x",
+      hp: 5,
+      maxHp: 10,
     });
-    expect(token.id).toBeGreaterThan(0);
-
-    const updated = await ctx.caller.tokens.update({
-      id: token.id,
-      hp: 11,
-      cellX: 3,
-      cellY: 4,
-    });
-    expect(updated.token.hp).toBe(11);
-    expect(updated.token.cellX).toBe(3);
-
-    const moved = await ctx.caller.tokens.move({
-      tokenId: token.id,
-      cellX: 5,
-      cellY: 6,
-    });
-    expect(moved.token.cellX).toBe(5);
-
-    await ctx.caller.tokens.remove({ id: token.id });
-    const state = await ctx.caller.game.state();
-    expect(state.tokens).toHaveLength(0);
-  });
-
-  it("rejects hp > maxHp and out-of-board coordinates", async () => {
-    const { ctx } = await dmWithBoard();
     await expectTrpcError(
-      ctx.caller.tokens.add({ kind: "hero", label: "X", hp: 5, maxHp: 4 }),
+      caller.tokens.update({ id: token.id, hp: 11 }),
       "BAD_REQUEST",
     );
     await expectTrpcError(
-      ctx.caller.tokens.add({
-        kind: "hero",
-        label: "Y",
-        hp: 1,
-        maxHp: 1,
-        cellX: 999,
-        cellY: 0,
-      }),
+      caller.tokens.update({ id: token.id, maxHp: 4 }),
       "BAD_REQUEST",
+    );
+    const healed = await caller.tokens.update({ id: token.id, hp: 9 });
+    expect(healed.token.hp).toBe(9);
+  });
+
+  it("tokens.update is master-only, even for a token the player owns", async () => {
+    await createBoard();
+    const dm = await masterCaller();
+    const { token } = await dm.tokens.add({
+      kind: "hero",
+      label: "Hero",
+      ownerId: player.id,
+      hp: 5,
+      maxHp: 10,
+    });
+    const pc = await playerCaller();
+    await expectTrpcError(
+      pc.tokens.update({ id: token.id, label: "Renamed" }),
+      "FORBIDDEN",
     );
   });
 
-  it("players can move only their own tokens", async () => {
-    const { dm, ctx } = await dmWithBoard();
-    const player = await registerUser("walker");
-    const other = await registerUser("other");
-
-    const ownToken = (
-      await ctx.caller.tokens.add({
+  it("lets a player move ONLY their own token", async () => {
+    await createBoard();
+    const dm = await masterCaller();
+    const mine = (
+      await dm.tokens.add({
         kind: "hero",
         label: "Mine",
         ownerId: player.id,
         hp: 5,
-        maxHp: 5,
+        maxHp: 10,
       })
     ).token;
-    const othersToken = (
-      await ctx.caller.tokens.add({
+    const theirs = (
+      await dm.tokens.add({
         kind: "hero",
-        label: "NotMine",
-        ownerId: other.id,
+        label: "Theirs",
+        ownerId: master.id,
         hp: 5,
-        maxHp: 5,
+        maxHp: 10,
       })
     ).token;
     const unowned = (
-      await ctx.caller.tokens.add({
-        kind: "prop",
-        label: "Crate",
-        hp: 0,
-        maxHp: 1,
-      })
+      await dm.tokens.add({ kind: "prop", label: "Rock", hp: 0, maxHp: 0 })
     ).token;
 
-    const asPlayer = await newContext(player.cookie);
-    const moved = await asPlayer.caller.tokens.move({
-      tokenId: ownToken.id,
-      cellX: 1,
-      cellY: 1,
+    const pc = await playerCaller();
+    const moved = await pc.tokens.move({ tokenId: mine.id, cellX: 3, cellY: 4 });
+    expect(moved.token.cellX).toBe(3);
+    expect(moved.token.cellY).toBe(4);
+
+    await expectTrpcError(
+      pc.tokens.move({ tokenId: theirs.id, cellX: 1, cellY: 1 }),
+      "FORBIDDEN",
+    );
+    await expectTrpcError(
+      pc.tokens.move({ tokenId: unowned.id, cellX: 1, cellY: 1 }),
+      "FORBIDDEN",
+    );
+
+    // Master moves anything.
+    const dmAgain = await masterCaller();
+    const masterMoved = await dmAgain.tokens.move({
+      tokenId: theirs.id,
+      cellX: 8,
+      cellY: 9,
     });
-    expect(moved.token.cellX).toBe(1);
-
-    await expectTrpcError(
-      asPlayer.caller.tokens.move({
-        tokenId: othersToken.id,
-        cellX: 2,
-        cellY: 2,
-      }),
-      "FORBIDDEN",
-    );
-    await expectTrpcError(
-      asPlayer.caller.tokens.move({
-        tokenId: unowned.id,
-        cellX: 2,
-        cellY: 2,
-      }),
-      "FORBIDDEN",
-    );
-
-    // Players cannot add/update/remove at all.
-    await expectTrpcError(
-      asPlayer.caller.tokens.add({ kind: "prop", label: "Z", hp: 0, maxHp: 1 }),
-      "FORBIDDEN",
-    );
-    await expectTrpcError(
-      asPlayer.caller.tokens.update({ id: ownToken.id, hp: 0 }),
-      "FORBIDDEN",
-    );
-    await expectTrpcError(
-      asPlayer.caller.tokens.remove({ id: ownToken.id }),
-      "FORBIDDEN",
-    );
-
-    // Master can move anything.
-    const dmAgain = await newContext(dm.cookie);
-    const moved2 = await dmAgain.caller.tokens.move({
-      tokenId: unowned.id,
-      cellX: 7,
-      cellY: 7,
-    });
-    expect(moved2.token.cellX).toBe(7);
+    expect(masterMoved.token.cellX).toBe(8);
   });
 
-  it("clear empties the board and its initiative", async () => {
-    const { ctx, board } = await dmWithBoard();
-    const t = (
-      await ctx.caller.tokens.add({ kind: "hero", label: "A", hp: 1, maxHp: 1 })
+  it("rejects moves outside the active board", async () => {
+    await createBoard();
+    const dm = await masterCaller();
+    const token = (
+      await dm.tokens.add({
+        kind: "hero",
+        label: "Bounded",
+        ownerId: player.id,
+        hp: 5,
+        maxHp: 10,
+      })
     ).token;
-    await ctx.caller.initiative.set({ entries: [{ tokenId: t.id, value: 15 }] });
-    await ctx.caller.tokens.clear({ boardId: board.id });
-    const state = await ctx.caller.game.state();
-    expect(state.tokens).toHaveLength(0);
-    expect(state.initiative).toHaveLength(0);
+    const pc = await playerCaller();
+    await expectTrpcError(
+      pc.tokens.move({ tokenId: token.id, cellX: -1, cellY: 0 }),
+      "BAD_REQUEST",
+    );
+    await expectTrpcError(
+      pc.tokens.move({ tokenId: token.id, cellX: 20, cellY: 0 }),
+      "BAD_REQUEST",
+    );
+    await expectTrpcError(
+      pc.tokens.move({ tokenId: token.id, cellX: 0, cellY: 10 }),
+      "BAD_REQUEST",
+    );
+  });
+
+  it("move of a missing token is 404", async () => {
+    await createBoard();
+    const pc = await playerCaller();
+    await expectTrpcError(
+      pc.tokens.move({ tokenId: 999, cellX: 0, cellY: 0 }),
+      "NOT_FOUND",
+    );
+  });
+
+  it("rejects assigning a token to a non-existent owner", async () => {
+    await createBoard();
+    const dm = await masterCaller();
+    await expectTrpcError(
+      dm.tokens.add({
+        kind: "hero",
+        label: "x",
+        ownerId: 9999,
+        hp: 1,
+        maxHp: 1,
+      }),
+      "BAD_REQUEST",
+    );
+  });
+
+  it("tokens.remove and tokens.clear are master-only", async () => {
+    await createBoard();
+    const dm = await masterCaller();
+    const { token } = await dm.tokens.add({
+      kind: "prop",
+      label: "x",
+      hp: 0,
+      maxHp: 0,
+    });
+    const pc = await playerCaller();
+    await expectTrpcError(pc.tokens.remove({ id: token.id }), "FORBIDDEN");
+    const state = await pc.game.state();
+    await expectTrpcError(
+      pc.tokens.clear({ boardId: state.activeBoard!.id }),
+      "FORBIDDEN",
+    );
   });
 });
 
 describe("initiative", () => {
-  it("master sets manual initiative; unknown token ids are dropped", async () => {
-    const { ctx } = await dmWithBoard();
-    const t = (
-      await ctx.caller.tokens.add({ kind: "monster", label: "Gob", hp: 7, maxHp: 7 })
-    ).token;
-    const result = await ctx.caller.initiative.set({
-      entries: [
-        { tokenId: t.id, value: 12 },
-        { tokenId: 9999, value: 3 },
-      ],
+  it("is master-only and bound to the active board", async () => {
+    await createBoard();
+    const dm = await masterCaller();
+    const { token } = await dm.tokens.add({
+      kind: "hero",
+      label: "x",
+      hp: 1,
+      maxHp: 1,
     });
-    expect(result.initiative).toEqual([{ tokenId: t.id, value: 12 }]);
-    const state = await ctx.caller.game.state();
-    expect(state.initiative).toEqual([{ tokenId: t.id, value: 12 }]);
-  });
 
-  it("initiative.set is master-only", async () => {
-    await dmWithBoard();
-    const player = await registerUser("p-init");
-    const asPlayer = await newContext(player.cookie);
+    const pc = await playerCaller();
     await expectTrpcError(
-      asPlayer.caller.initiative.set({ entries: [] }),
+      pc.initiative.set({ entries: [{ tokenId: token.id, value: 12 }] }),
       "FORBIDDEN",
     );
+
+    const set = await dm.initiative.set({
+      entries: [{ tokenId: token.id, value: 12 }],
+    });
+    expect(set.initiative).toEqual([{ tokenId: token.id, value: 12 }]);
+    const state = await dm.game.state();
+    expect(state.initiative).toEqual([{ tokenId: token.id, value: 12 }]);
+  });
+
+  it("rejects entries referencing tokens of another board", async () => {
+    await createBoard("One");
+    const dm = await masterCaller();
+    const { token } = await dm.tokens.add({
+      kind: "hero",
+      label: "x",
+      hp: 1,
+      maxHp: 1,
+    });
+    await dm.boards.create({ name: "Two" });
+    // `token` lives on board One; make board Two active.
+    const state = await dm.game.state();
+    const boardTwo = state.boards.find((b) => b.name === "Two")!;
+    await dm.boards.setActive({ id: boardTwo.id });
+    await expectTrpcError(
+      dm.initiative.set({ entries: [{ tokenId: token.id, value: 5 }] }),
+      "BAD_REQUEST",
+    );
+  });
+
+  it("removes initiative entries of deleted tokens in the same transaction", async () => {
+    await createBoard();
+    const dm = await masterCaller();
+    const a = (
+      await dm.tokens.add({ kind: "hero", label: "a", hp: 1, maxHp: 1 })
+    ).token;
+    const b = (
+      await dm.tokens.add({ kind: "hero", label: "b", hp: 1, maxHp: 1 })
+    ).token;
+    await dm.initiative.set({
+      entries: [
+        { tokenId: a.id, value: 15 },
+        { tokenId: b.id, value: 3 },
+      ],
+    });
+
+    await dm.tokens.remove({ id: a.id });
+    let state = await dm.game.state();
+    expect(state.initiative).toEqual([{ tokenId: b.id, value: 3 }]);
+
+    const boardId = state.activeBoard!.id;
+    await dm.tokens.clear({ boardId });
+    state = await dm.game.state();
+    expect(state.tokens).toEqual([]);
+    expect(state.initiative).toEqual([]);
   });
 });
 
-describe("game.state", () => {
-  it("requires authentication and returns the safe user DTO", async () => {
-    const anon = await newContext();
-    await expectTrpcError(anon.caller.game.state(), "UNAUTHORIZED");
-
-    const { ctx } = await dmWithBoard();
-    const state = await ctx.caller.game.state();
-    expect(state.me.login).toBe("dm");
-    expect(state.me).not.toHaveProperty("passwordHash");
+describe("revisions", () => {
+  it("bump monotonically across game mutations", async () => {
+    const created = await createBoard();
+    const dm = await masterCaller();
+    const added = await dm.tokens.add({
+      kind: "hero",
+      label: "a",
+      hp: 1,
+      maxHp: 1,
+    });
+    const moved = await dm.tokens.move({
+      tokenId: added.token.id,
+      cellX: 1,
+      cellY: 1,
+    });
+    const removed = await dm.tokens.remove({ id: added.token.id });
+    const revisions = [
+      created.revision,
+      added.revision,
+      moved.revision,
+      removed.revision,
+    ];
+    expect(revisions).toEqual([1, 2, 3, 4]);
+    const state = await dm.game.state();
+    expect(state.revision).toBe(4);
   });
 });
