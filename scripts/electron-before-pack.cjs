@@ -12,7 +12,7 @@ function capturePackagingOutput() {
     };
   }
   process.once("exit", () => {
-    const details = output.join("").trim().slice(-24000);
+    const details = output.join("").trim().slice(-6000);
     if (details) {
       stderr(`::notice title=Windows installer output::${annotationText(details)}\n`);
     }
