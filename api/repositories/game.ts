@@ -123,6 +123,19 @@ export function setBoardActiveFlag(
     .run();
 }
 
+export function setBoardBackgroundKey(
+  db: Db,
+  id: number,
+  imageKey: string | null,
+): BoardRow | undefined {
+  return db
+    .update(boards)
+    .set({ backgroundKey: imageKey, updatedAt: Date.now() })
+    .where(eq(boards.id, id))
+    .returning()
+    .get();
+}
+
 export function deleteBoardRow(db: Db, id: number): void {
   db.delete(boards).where(eq(boards.id, id)).run();
 }
@@ -171,7 +184,15 @@ export function updateTokenRow(
   patch: Partial<
     Pick<
       TokenRow,
-      "label" | "kind" | "ownerId" | "hp" | "maxHp" | "size" | "cellX" | "cellY"
+      | "label"
+      | "kind"
+      | "ownerId"
+      | "hp"
+      | "maxHp"
+      | "size"
+      | "cellX"
+      | "cellY"
+      | "imageKey"
     >
   >,
 ): TokenRow | undefined {

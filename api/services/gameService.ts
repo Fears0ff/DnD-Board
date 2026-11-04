@@ -14,6 +14,8 @@ import type {
 } from "../../contracts/game";
 import { bumpGameRevision, getGameRevision } from "../repositories/meta";
 import { findUserById, toUserDto } from "../repositories/users";
+import { findMediaAsset } from "../repositories/media";
+import { deleteAssetIfUnreferenced } from "./mediaService";
 import {
   countBoards,
   deleteBoardRow,
@@ -29,6 +31,7 @@ import {
   parseInitiative,
   renameBoardRow,
   setBoardActiveFlag,
+  setBoardBackgroundKey,
   setBoardInitiative,
   toBoardDto,
   toTokenDto,
@@ -151,14 +154,20 @@ export function renameBoard(
   return result;
 }
 
-export function removeBoard(
+export async function removeBoard(
   db: AppDatabase,
   id: number,
-): MutationResult<{ removedId: number }> {
+): Promise<MutationResult<{ removedId: number }>> {
+  let replacedKeys: (string | null)[] = [];
   const result = db.transaction((tx) => {
     const t = tx;
     const board = requireBoard(t, id);
-    // Tokens are removed by ON DELETE CASCADE.
+    // Media keys whose references die with this board: its background and
+    // the images of its tokens (tokens are removed by ON DELETE CASCADE).
+    replacedKeys = [
+      board.backgroundKey,
+      ...listTokensByBoard(t, id).map((token) => token.imageKey),
+    ];
     deleteBoardRow(t, id);
     if (board.isActive) {
       // Never leave the space without an active board if others remain.
@@ -168,6 +177,31 @@ export function removeBoard(
     return { value: { removedId: id }, revision: bumpGameRevision(t) };
   });
   publishGameChanged(result.revision);
+  await cleanupReplacedAssets(db, replacedKeys);
+  return result;
+}
+
+/** Master-only: set/replace (or clear, with null) a board background image. */
+export async function setBoardBackground(
+  db: AppDatabase,
+  id: number,
+  imageKey: string | null,
+): Promise<MutationResult<BoardDto>> {
+  let replacedKey: string | null = null;
+  const result = db.transaction((tx) => {
+    const t = tx;
+    const board = requireBoard(t, id);
+    assertMediaAssetExists(t, imageKey);
+    replacedKey =
+      board.backgroundKey !== imageKey ? board.backgroundKey : null;
+    const updated = setBoardBackgroundKey(t, id, imageKey);
+    if (!updated) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Board not found" });
+    }
+    return { value: toBoardDto(updated), revision: bumpGameRevision(t) };
+  });
+  publishGameChanged(result.revision);
+  await cleanupReplacedAssets(db, [replacedKey]);
   return result;
 }
 
@@ -201,6 +235,31 @@ function assertValidOwner(db: DbHandle, ownerId: number | null): void {
   }
 }
 
+/** Image references must point at real media assets (FK is the backstop). */
+function assertMediaAssetExists(db: DbHandle, imageKey: string | null): void {
+  if (imageKey !== null && !findMediaAsset(db, imageKey)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "imageKey does not reference an existing media asset",
+    });
+  }
+}
+
+/**
+ * Best-effort media cleanup AFTER the game mutation has committed and been
+ * published (plan §8.3.3/5): a file-deletion failure is logged inside
+ * deleteAssetIfUnreferenced and retried by the orphan cleanup; it never
+ * rolls back the game change.
+ */
+async function cleanupReplacedAssets(
+  db: AppDatabase,
+  keys: (string | null)[],
+): Promise<void> {
+  for (const key of new Set(keys)) {
+    if (key) await deleteAssetIfUnreferenced(db, key);
+  }
+}
+
 export function addToken(
   db: AppDatabase,
   input: TokenAddInput,
@@ -215,6 +274,8 @@ export function addToken(
         : requireActiveBoard(t);
     const ownerId = input.ownerId ?? null;
     assertValidOwner(t, ownerId);
+    const imageKey = input.imageKey ?? null;
+    assertMediaAssetExists(t, imageKey);
     const row = insertToken(t, {
       boardId: board.id,
       kind: input.kind,
@@ -228,7 +289,7 @@ export function addToken(
       size: input.size ?? 1,
       characterId: null,
       compendiumId: null,
-      imageKey: null,
+      imageKey,
     });
     return { value: toTokenDto(row), revision: bumpGameRevision(t) };
   });
@@ -237,10 +298,11 @@ export function addToken(
 }
 
 /** Master-only full update. Players must use moveToken instead. */
-export function updateToken(
+export async function updateToken(
   db: AppDatabase,
   input: TokenUpdateInput,
-): MutationResult<TokenDto> {
+): Promise<MutationResult<TokenDto>> {
+  let replacedKey: string | null = null;
   const result = db.transaction((tx) => {
     const t = tx;
     const token = findTokenById(t, input.id);
@@ -258,6 +320,10 @@ export function updateToken(
     if (input.ownerId !== undefined) {
       assertValidOwner(t, input.ownerId);
     }
+    if (input.imageKey !== undefined) {
+      assertMediaAssetExists(t, input.imageKey);
+      if (input.imageKey !== token.imageKey) replacedKey = token.imageKey;
+    }
     const row = updateTokenRow(t, input.id, {
       ...(input.label !== undefined ? { label: input.label } : {}),
       ...(input.kind !== undefined ? { kind: input.kind } : {}),
@@ -267,6 +333,7 @@ export function updateToken(
       ...(input.size !== undefined ? { size: input.size } : {}),
       ...(input.cellX !== undefined ? { cellX: input.cellX } : {}),
       ...(input.cellY !== undefined ? { cellY: input.cellY } : {}),
+      ...(input.imageKey !== undefined ? { imageKey: input.imageKey } : {}),
     });
     if (!row) {
       throw new TRPCError({ code: "NOT_FOUND", message: "Token not found" });
@@ -274,6 +341,7 @@ export function updateToken(
     return { value: toTokenDto(row), revision: bumpGameRevision(t) };
   });
   publishGameChanged(result.revision);
+  await cleanupReplacedAssets(db, [replacedKey]);
   return result;
 }
 
@@ -355,16 +423,18 @@ export function adjustTokenHp(
   return result;
 }
 
-export function removeToken(
+export async function removeToken(
   db: AppDatabase,
   id: number,
-): MutationResult<{ removedId: number }> {
+): Promise<MutationResult<{ removedId: number }>> {
+  let replacedKey: string | null = null;
   const result = db.transaction((tx) => {
     const t = tx;
     const token = findTokenById(t, id);
     if (!token) {
       throw new TRPCError({ code: "NOT_FOUND", message: "Token not found" });
     }
+    replacedKey = token.imageKey;
     deleteTokenRow(t, id);
     // The token's initiative entries die with it, in the same transaction.
     const board = findBoardById(t, token.boardId);
@@ -377,21 +447,25 @@ export function removeToken(
     return { value: { removedId: id }, revision: bumpGameRevision(t) };
   });
   publishGameChanged(result.revision);
+  await cleanupReplacedAssets(db, [replacedKey]);
   return result;
 }
 
-export function clearTokens(
+export async function clearTokens(
   db: AppDatabase,
   boardId: number,
-): MutationResult<{ clearedBoardId: number }> {
+): Promise<MutationResult<{ clearedBoardId: number }>> {
+  let replacedKeys: (string | null)[] = [];
   const result = db.transaction((tx) => {
     const t = tx;
     requireBoard(t, boardId);
+    replacedKeys = listTokensByBoard(t, boardId).map((token) => token.imageKey);
     deleteTokensByBoard(t, boardId);
     setBoardInitiative(t, boardId, []);
     return { value: { clearedBoardId: boardId }, revision: bumpGameRevision(t) };
   });
   publishGameChanged(result.revision);
+  await cleanupReplacedAssets(db, replacedKeys);
   return result;
 }
 

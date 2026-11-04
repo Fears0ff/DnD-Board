@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "category": {
+      "default": "other",
+      "type": "string",
+      "enum": [
+        "weapon",
+        "armor",
+        "gear",
+        "tool",
+        "consumable",
+        "treasure",
+        "other"
+      ]
+    },
+    "rarity": {
+      "default": "none",
+      "type": "string",
+      "enum": [
+        "none",
+        "common",
+        "uncommon",
+        "rare",
+        "veryRare",
+        "legendary",
+        "artifact"
+      ]
+    },
+    "cost": {
+      "default": "",
+      "type": "string",
+      "maxLength": 100
+    },
+    "weight": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100000
+    },
+    "properties": {
+      "default": [],
+      "maxItems": 30,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 100
+      }
+    },
+    "attunement": {
+      "default": false,
+      "type": "boolean"
+    },
+    "description": {
+      "default": "",
+      "type": "string",
+      "maxLength": 20000
+    }
+  },
+  "description": "DnD Board compendium v1: item card data",
+  "$id": "https://dnd-board.local/import-schemas/v1/item.json",
+  "title": "DnD Board compendium item card (v1)"
+}

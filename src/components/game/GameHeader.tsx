@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   Check,
   ChevronDown,
   Grid3x3,
+  Image as ImageIcon,
+  ImageOff,
   ListOrdered,
   LogOut,
   Map as MapIcon,
@@ -16,6 +18,13 @@ import {
 import { toast } from "sonner";
 import { queryClient } from "@/providers/trpc";
 import { api, invalidateGameState, trpcErrorMessage } from "@/lib/api";
+import {
+  IMAGE_ACCEPT_ATTR,
+  boardBackgroundApi,
+  fileToBase64,
+  mediaApi,
+  validatePickedImage,
+} from "@/lib/media";
 import type { BoardDto, UserDto } from "@/lib/game-contract";
 import type { RealtimeStatus } from "@/lib/realtime";
 import { Button } from "@/components/ui/button";
@@ -40,6 +49,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { BrandMark } from "./FullScreenState";
+import { LibraryMenu } from "./LibraryMenu";
 
 interface BoardFormDialogProps {
   open: boolean;
@@ -74,7 +84,7 @@ function BoardFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-xs" onOpenAutoFocus={() => setName(initialName)}>
+      <DialogContent className="sm:max-w-xs" onOpenAutoFocus={() => setName(initialName)}>
         <DialogHeader>
           <DialogTitle className="text-sm">{title}</DialogTitle>
         </DialogHeader>
@@ -140,6 +150,8 @@ function BoardsMenu({
   const [createOpen, setCreateOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
   const [removeOpen, setRemoveOpen] = useState(false);
+  const [bgUploading, setBgUploading] = useState(false);
+  const bgInputRef = useRef<HTMLInputElement | null>(null);
 
   const onError = (err: unknown, fallback: string) =>
     toast.error(trpcErrorMessage(err, fallback));
@@ -149,6 +161,46 @@ function BoardsMenu({
   const renameMutation = api.boards.rename.useMutation();
   const removeMutation = api.boards.remove.useMutation();
   const setActiveMutation = api.boards.setActive.useMutation();
+  const uploadMutation = mediaApi.uploadImage.useMutation();
+  const setBackgroundMutation = boardBackgroundApi.setBackground.useMutation();
+
+  // Фон поля: загрузка → media.uploadImage(purpose:"board") → boards.setBackground.
+  // Старый фон сервер удаляет сам после успешной замены.
+  const pickBackground = async (file: File | undefined) => {
+    if (!file || !viewedBoard) return;
+    const problem = validatePickedImage(file);
+    if (problem) {
+      toast.error(problem);
+      return;
+    }
+    setBgUploading(true);
+    try {
+      const dataBase64 = await fileToBase64(file);
+      const asset = await uploadMutation.mutateAsync({ dataBase64, purpose: "board" });
+      await setBackgroundMutation.mutateAsync({ id: viewedBoard.id, imageKey: asset.key });
+      invalidateGameState();
+      toast.success(`Фон поля «${viewedBoard.name}» обновлён`);
+    } catch (err) {
+      onError(err, "Не удалось загрузить фон поля");
+    } finally {
+      setBgUploading(false);
+      if (bgInputRef.current) bgInputRef.current.value = "";
+    }
+  };
+
+  const clearBackground = () => {
+    if (!viewedBoard) return;
+    setBackgroundMutation.mutate(
+      { id: viewedBoard.id, imageKey: null },
+      {
+        onSuccess: () => {
+          invalidateGameState();
+          toast.success("Фон поля убран");
+        },
+        onError: (err) => onError(err, "Не удалось убрать фон"),
+      },
+    );
+  };
 
   return (
     <>
@@ -212,6 +264,27 @@ function BoardsMenu({
           </DropdownMenuItem>
           {viewedBoard ? (
             <>
+              <DropdownMenuItem
+                className="ui-hover text-xs"
+                disabled={bgUploading || uploadMutation.isPending || setBackgroundMutation.isPending}
+                onSelect={() => bgInputRef.current?.click()}
+              >
+                <ImageIcon className="size-3.5" />
+                {bgUploading || uploadMutation.isPending
+                  ? "Загрузка фона…"
+                  : viewedBoard.backgroundKey
+                    ? "Заменить фон"
+                    : "Загрузить фон"}
+              </DropdownMenuItem>
+              {viewedBoard.backgroundKey ? (
+                <DropdownMenuItem
+                  className="ui-hover text-xs"
+                  disabled={setBackgroundMutation.isPending}
+                  onSelect={clearBackground}
+                >
+                  <ImageOff className="size-3.5" /> Убрать фон
+                </DropdownMenuItem>
+              ) : null}
               <DropdownMenuItem className="ui-hover text-xs" onSelect={() => setRenameOpen(true)}>
                 <Pencil className="size-3.5" /> Переименовать
               </DropdownMenuItem>
@@ -225,6 +298,15 @@ function BoardsMenu({
           ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
+
+      <input
+        ref={bgInputRef}
+        type="file"
+        accept={IMAGE_ACCEPT_ATTR}
+        className="hidden"
+        aria-label="Файл фона поля"
+        onChange={(e) => void pickBackground(e.target.files?.[0])}
+      />
 
       <BoardFormDialog
         open={createOpen}
@@ -262,7 +344,7 @@ function BoardsMenu({
         }
       />
       <Dialog open={removeOpen} onOpenChange={setRemoveOpen}>
-        <DialogContent className="max-w-xs">
+        <DialogContent className="sm:max-w-xs">
           <DialogHeader>
             <DialogTitle className="text-sm">Удалить поле</DialogTitle>
             <DialogDescription className="text-xs">
@@ -335,6 +417,9 @@ export interface GameHeaderProps {
   onAddToken: () => void;
   onOpenInitiative: () => void;
   onOpenUsers: () => void;
+  onOpenCompendium: () => void;
+  onOpenCharacters: () => void;
+  onOpenNotes: () => void;
 }
 
 export function GameHeader({
@@ -350,11 +435,14 @@ export function GameHeader({
   onAddToken,
   onOpenInitiative,
   onOpenUsers,
+  onOpenCompendium,
+  onOpenCharacters,
+  onOpenNotes,
 }: GameHeaderProps) {
   const logoutMutation = api.auth.logout.useMutation();
 
   return (
-    <header className="flex h-14 shrink-0 items-center gap-2 border-b bg-card/60 px-3">
+    <header className="flex h-14 shrink-0 items-center gap-2 overflow-x-auto border-b bg-card/60 px-3">
       <div className="flex items-center gap-2 pr-1">
         <BrandMark className="size-5" />
         <span className="hidden text-sm font-semibold tracking-wide sm:inline">DnD Board</span>
@@ -380,6 +468,12 @@ export function GameHeader({
           <Grid3x3 className="size-3.5 text-muted-foreground" />
           <Switch checked={gridOn} onCheckedChange={onGridChange} aria-label="Сетка" />
         </div>
+
+        <LibraryMenu
+          onOpenCompendium={onOpenCompendium}
+          onOpenCharacters={onOpenCharacters}
+          onOpenNotes={onOpenNotes}
+        />
 
         {isMaster ? (
           <Button
@@ -422,11 +516,13 @@ export function GameHeader({
 
         <Separator orientation="vertical" className="mx-1 h-6" />
 
-        <ConnectionBadge status={wsStatus} />
+        <div className="hidden sm:block">
+          <ConnectionBadge status={wsStatus} />
+        </div>
 
         <Badge
           variant={isMaster ? "default" : "secondary"}
-          className="ml-1 h-6 px-2 text-[11px] font-medium"
+          className="ml-1 hidden h-6 px-2 text-[11px] font-medium md:inline-flex"
           title={isMaster ? "Мастер" : "Игрок"}
         >
           {me.displayName || me.login}
@@ -447,6 +543,7 @@ export function GameHeader({
             })
           }
           title="Выйти"
+          aria-label="Выход"
         >
           <LogOut className="size-3.5" />
           <span className="hidden sm:inline">Выход</span>

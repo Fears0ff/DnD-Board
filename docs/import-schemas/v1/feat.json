@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "category": {
+      "default": "other",
+      "type": "string",
+      "enum": [
+        "origin",
+        "general",
+        "fightingStyle",
+        "epicBoon",
+        "other"
+      ]
+    },
+    "prerequisite": {
+      "default": "",
+      "type": "string",
+      "maxLength": 500
+    },
+    "repeatable": {
+      "default": false,
+      "type": "boolean"
+    },
+    "classes": {
+      "default": [],
+      "maxItems": 20,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 64
+      }
+    },
+    "description": {
+      "default": "",
+      "type": "string",
+      "maxLength": 20000
+    }
+  },
+  "description": "DnD Board compendium v1: feat card data",
+  "$id": "https://dnd-board.local/import-schemas/v1/feat.json",
+  "title": "DnD Board compendium feat card (v1)"
+}

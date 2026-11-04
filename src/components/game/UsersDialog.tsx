@@ -61,7 +61,7 @@ export function UsersDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="text-sm">Пользователи и роли</DialogTitle>
           <DialogDescription className="text-xs">

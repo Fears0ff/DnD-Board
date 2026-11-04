@@ -1,7 +1,14 @@
-import { useEffect, useState } from "react";
-import { Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { ImagePlus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, invalidateGameState, trpcErrorMessage } from "@/lib/api";
+import {
+  IMAGE_ACCEPT_ATTR,
+  boardImageUrl,
+  fileToBase64,
+  mediaApi,
+  validatePickedImage,
+} from "@/lib/media";
 import {
   TOKEN_KIND_LABELS,
   type BoardDto,
@@ -49,6 +56,9 @@ export function TokenDialog({ state, board, onClose }: TokenDialogProps) {
   const [hp, setHp] = useState(token?.hp ?? 10);
   const [maxHp, setMaxHp] = useState(token?.maxHp ?? 10);
   const [size, setSize] = useState(token?.size ?? 1);
+  const [imageKey, setImageKey] = useState<string | null>(token?.imageKey ?? null);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -60,6 +70,8 @@ export function TokenDialog({ state, board, onClose }: TokenDialogProps) {
     setHp(token?.hp ?? 10);
     setMaxHp(token?.maxHp ?? 10);
     setSize(token?.size ?? 1);
+    setImageKey(token?.imageKey ?? null);
+    setUploading(false);
     setConfirmDelete(false);
     setError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -69,7 +81,34 @@ export function TokenDialog({ state, board, onClose }: TokenDialogProps) {
   const addMutation = api.tokens.add.useMutation();
   const updateMutation = api.tokens.update.useMutation();
   const removeMutation = api.tokens.remove.useMutation();
-  const pending = addMutation.isPending || updateMutation.isPending || removeMutation.isPending;
+  const uploadMutation = mediaApi.uploadImage.useMutation();
+  const pending =
+    addMutation.isPending ||
+    updateMutation.isPending ||
+    removeMutation.isPending ||
+    uploadMutation.isPending ||
+    uploading;
+
+  const pickImage = async (file: File | undefined) => {
+    if (!file) return;
+    const problem = validatePickedImage(file);
+    if (problem) {
+      setError(problem);
+      return;
+    }
+    setError(null);
+    setUploading(true);
+    try {
+      const dataBase64 = await fileToBase64(file);
+      const asset = await uploadMutation.mutateAsync({ dataBase64, purpose: "token" });
+      setImageKey(asset.key);
+    } catch (e) {
+      setError(trpcErrorMessage(e, "Не удалось загрузить изображение"));
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
 
   const clampHp = (value: number, max: number) => Math.max(0, Math.min(max, value));
 
@@ -87,7 +126,7 @@ export function TokenDialog({ state, board, onClose }: TokenDialogProps) {
 
     if (isEdit && token) {
       updateMutation.mutate(
-        { id: token.id, label: trimmed, kind, ownerId: owner, hp: safeHp, maxHp: safeMax, size: safeSize },
+        { id: token.id, label: trimmed, kind, ownerId: owner, hp: safeHp, maxHp: safeMax, size: safeSize, imageKey },
         {
           onSuccess: () => { invalidateGameState(); onClose(); },
           onError: (e) => setError(trpcErrorMessage(e, "Не удалось сохранить токен")),
@@ -103,6 +142,7 @@ export function TokenDialog({ state, board, onClose }: TokenDialogProps) {
           hp: safeHp,
           maxHp: safeMax,
           size: safeSize,
+          imageKey: imageKey ?? undefined,
           // новый токен появляется в центре просматриваемого поля
           cellX: Math.max(0, Math.floor((board.gridWidth - safeSize) / 2)),
           cellY: Math.max(0, Math.floor((board.gridHeight - safeSize) / 2)),
@@ -132,7 +172,7 @@ export function TokenDialog({ state, board, onClose }: TokenDialogProps) {
 
   return (
     <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-sm">
+      <DialogContent className="sm:max-w-sm">
         <DialogHeader>
           <DialogTitle className="text-sm">
             {isEdit ? `Токен «${token?.label}»` : "Новый токен"}
@@ -247,6 +287,64 @@ export function TokenDialog({ state, board, onClose }: TokenDialogProps) {
                 />
               </div>
             </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-xs">Изображение</Label>
+            <div className="flex items-center gap-2.5">
+              <div className="flex size-14 shrink-0 items-center justify-center overflow-hidden rounded-full border bg-muted">
+                {imageKey ? (
+                  <img
+                    src={boardImageUrl(imageKey)}
+                    alt="Изображение токена"
+                    className="size-full object-cover"
+                  />
+                ) : (
+                  <span className="text-sm font-semibold text-muted-foreground">
+                    {(label.trim().slice(0, 2) || "?").toUpperCase()}
+                  </span>
+                )}
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="ui-hover h-8 gap-1.5 text-xs"
+                  disabled={pending}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <ImagePlus className="size-3.5" />
+                  {uploading || uploadMutation.isPending
+                    ? "Загрузка…"
+                    : imageKey
+                      ? "Заменить"
+                      : "Загрузить"}
+                </Button>
+                {imageKey ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="ui-hover h-8 gap-1.5 text-xs text-muted-foreground"
+                    disabled={pending}
+                    onClick={() => setImageKey(null)}
+                  >
+                    <X className="size-3.5" /> Убрать
+                  </Button>
+                ) : null}
+              </div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept={IMAGE_ACCEPT_ATTR}
+                className="hidden"
+                onChange={(e) => void pickImage(e.target.files?.[0])}
+              />
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              PNG, JPEG или WebP до 15 МиБ.
+            </p>
           </div>
 
           {error ? (

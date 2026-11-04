@@ -61,6 +61,9 @@ export const tokenAddInputSchema = z
     cellY: cellCoordSchema.optional(),
     // Master may target any board; without boardId the active board is used.
     boardId: idSchema.optional(),
+    // Optional token image: an existing media_assets key (uploaded via
+    // media.uploadImage). FK + existence enforced server-side.
+    imageKey: mediaKeySchema.nullish(),
   })
   .refine((v) => v.hp <= v.maxHp, {
     message: "hp must be <= maxHp",
@@ -79,8 +82,17 @@ export const tokenUpdateInputSchema = z.object({
   size: tokenSizeSchema.optional(),
   cellX: cellCoordSchema.optional(),
   cellY: cellCoordSchema.optional(),
+  // null clears the image; undefined leaves it unchanged.
+  imageKey: mediaKeySchema.nullish(),
 });
 export type TokenUpdateInput = z.infer<typeof tokenUpdateInputSchema>;
+
+/** Set/replace/clear a board background image (null clears). Master-only. */
+export const boardSetBackgroundInputSchema = z.object({
+  id: idSchema,
+  imageKey: mediaKeySchema.nullable(),
+});
+export type BoardSetBackgroundInput = z.infer<typeof boardSetBackgroundInputSchema>;
 
 export const tokenMoveInputSchema = z.object({
   tokenId: idSchema,

@@ -3,6 +3,7 @@ import {
   boardCreateInputSchema,
   boardIdInputSchema,
   boardRenameInputSchema,
+  boardSetBackgroundInputSchema,
   gameStateInputSchema,
   initiativeSetInputSchema,
   tokenAddInputSchema,
@@ -23,6 +24,7 @@ import {
   removeToken,
   renameBoard,
   setActiveBoard,
+  setBoardBackground,
   setInitiative,
   updateToken,
 } from "../services/gameService";
@@ -50,10 +52,23 @@ export const boardsRouter = createRouter({
       return { board: value, revision };
     }),
 
-  remove: masterProcedure.input(boardIdInputSchema).mutation(({ input }) => {
-    const { value, revision } = removeBoard(getDb(), input.id);
-    return { ...value, revision };
-  }),
+  remove: masterProcedure
+    .input(boardIdInputSchema)
+    .mutation(async ({ input }) => {
+      const { value, revision } = await removeBoard(getDb(), input.id);
+      return { ...value, revision };
+    }),
+
+  setBackground: masterProcedure
+    .input(boardSetBackgroundInputSchema)
+    .mutation(async ({ input }) => {
+      const { value, revision } = await setBoardBackground(
+        getDb(),
+        input.id,
+        input.imageKey,
+      );
+      return { board: value, revision };
+    }),
 
   setActive: masterProcedure
     .input(boardIdInputSchema)
@@ -70,10 +85,12 @@ export const tokensRouter = createRouter({
   }),
 
   // Master-only by design, so a player can never edit restricted fields.
-  update: masterProcedure.input(tokenUpdateInputSchema).mutation(({ input }) => {
-    const { value, revision } = updateToken(getDb(), input);
-    return { token: value, revision };
-  }),
+  update: masterProcedure
+    .input(tokenUpdateInputSchema)
+    .mutation(async ({ input }) => {
+      const { value, revision } = await updateToken(getDb(), input);
+      return { token: value, revision };
+    }),
 
   // The single token operation a player may perform — and only on a token
   // they own (enforced in the service, not just hidden in the UI).
@@ -90,15 +107,17 @@ export const tokensRouter = createRouter({
       return { token: value, revision };
     }),
 
-  remove: masterProcedure.input(boardIdInputSchema).mutation(({ input }) => {
-    const { value, revision } = removeToken(getDb(), input.id);
-    return { ...value, revision };
-  }),
+  remove: masterProcedure
+    .input(boardIdInputSchema)
+    .mutation(async ({ input }) => {
+      const { value, revision } = await removeToken(getDb(), input.id);
+      return { ...value, revision };
+    }),
 
   clear: masterProcedure
     .input(tokensClearInputSchema)
-    .mutation(({ input }) => {
-      const { value, revision } = clearTokens(getDb(), input.boardId);
+    .mutation(async ({ input }) => {
+      const { value, revision } = await clearTokens(getDb(), input.boardId);
       return { ...value, revision };
     }),
 });

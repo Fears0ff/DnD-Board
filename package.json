@@ -1,8 +1,9 @@
 {
   "name": "dnd-board",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
+  "main": "dist/desktop/main.cjs",
   "scripts": {
     "dev": "vite",
     "build": "vite build && esbuild api/boot.ts --platform=node --bundle --format=esm --outdir=dist --banner:js=\"import { createRequire } from 'module';const require = createRequire(import.meta.url);\"",
@@ -14,10 +15,13 @@
     "test": "vitest run",
     "test:integration": "vitest run tests/integration",
     "test:e2e": "node tests/e2e/run.mjs",
+    "build:desktop": "electron-builder install-app-deps && npm run build && esbuild desktop/main.ts --platform=node --bundle --format=cjs --external:electron --outfile=dist/desktop/main.cjs",
+    "smoke:desktop": "node scripts/smoke-desktop.mjs",
+    "dist:win": "npm run build:desktop && electron-builder --win nsis --x64",
+    "gen:compendium-schemas": "esbuild scripts/generate-compendium-schemas.ts --bundle --platform=node --format=esm --outfile=node_modules/.tmp/generate-compendium-schemas.mjs && node node_modules/.tmp/generate-compendium-schemas.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:push": "drizzle-kit push",
-    "postinstall": "node scripts/import-verified-source.mjs"
+    "db:push": "drizzle-kit push"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "2.0.78",
@@ -96,6 +100,8 @@
     "@vitejs/plugin-react": "^5.1.1",
     "autoprefixer": "^10.4.23",
     "drizzle-kit": "^0.31.8",
+    "electron": "^41.7.1",
+    "electron-builder": "^26.18.0",
     "esbuild": "^0.27.2",
     "eslint": "^9.39.1",
     "eslint-plugin-react-hooks": "^7.0.1",

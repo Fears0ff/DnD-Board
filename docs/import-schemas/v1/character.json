@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "level": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 20
+    },
+    "className": {
+      "default": "",
+      "type": "string",
+      "maxLength": 64
+    },
+    "subclass": {
+      "default": "",
+      "type": "string",
+      "maxLength": 64
+    },
+    "species": {
+      "default": "",
+      "type": "string",
+      "maxLength": 64
+    },
+    "background": {
+      "default": "",
+      "type": "string",
+      "maxLength": 64
+    },
+    "abilities": {
+      "type": "object",
+      "properties": {
+        "str": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30
+        },
+        "dex": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30
+        },
+        "con": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30
+        },
+        "int": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30
+        },
+        "wis": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30
+        },
+        "cha": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30
+        }
+      },
+      "required": [
+        "str",
+        "dex",
+        "con",
+        "int",
+        "wis",
+        "cha"
+      ]
+    },
+    "maxHp": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100000
+    },
+    "armorClass": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 50
+    },
+    "speed": {
+      "default": 30,
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000
+    },
+    "description": {
+      "default": "",
+      "type": "string",
+      "maxLength": 20000
+    },
+    "notes": {
+      "default": "",
+      "type": "string",
+      "maxLength": 20000
+    }
+  },
+  "required": [
+    "level",
+    "abilities",
+    "maxHp",
+    "armorClass"
+  ],
+  "description": "DnD Board compendium v1: character card data",
+  "$id": "https://dnd-board.local/import-schemas/v1/character.json",
+  "title": "DnD Board compendium character card (v1)"
+}

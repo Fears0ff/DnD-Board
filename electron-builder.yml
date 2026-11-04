@@ -1,0 +1,26 @@
+appId: local.dndboard.desktop
+productName: DnD Board
+main: dist/desktop/main.cjs
+directories:
+  output: release
+files:
+  - dist/**/*
+  - package.json
+asar: true
+asarUnpack:
+  - dist/node_modules/**/*
+npmRebuild: true
+buildDependenciesFromSource: false
+beforePack: scripts/electron-before-pack.cjs
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  artifactName: DnD-Board-Setup-${version}.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: DnD Board

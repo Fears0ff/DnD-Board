@@ -4,6 +4,8 @@ import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3"
 import type BetterSqlite3 from "better-sqlite3";
 import * as schema from "./schema";
 import { migrate, type SqliteDatabase } from "./migrate";
+import { migrations } from "./migrations";
+import { backupBeforeMigration } from "./backup";
 
 export type AppDatabase = BetterSQLite3Database<typeof schema> & {
   $client: SqliteDatabase;
@@ -48,8 +50,14 @@ export function openSqlite(file: string): SqliteDatabase {
  */
 export function createAppDatabase(file: string): AppDatabase {
   const sqlite = openSqlite(file);
-  migrate(sqlite);
-  return drizzle(sqlite, { schema });
+  try {
+    backupBeforeMigration(sqlite, process.env.DND_BACKUP_DIR, migrations);
+    migrate(sqlite);
+    return drizzle(sqlite, { schema });
+  } catch (error) {
+    sqlite.close();
+    throw error;
+  }
 }
 
 export function defaultDatabaseFile(): string {

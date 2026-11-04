@@ -19,6 +19,9 @@ import { GameHeader } from "./GameHeader";
 import { UsersDialog } from "./UsersDialog";
 import { TokenDialog, type TokenDialogState } from "./TokenDialog";
 import { InitiativePanel } from "./InitiativePanel";
+import { CharactersDialog } from "@/components/characters/CharactersDialog";
+import { NotesDialog } from "@/components/notes/NotesDialog";
+import { CompendiumDialog } from "@/components/compendium/CompendiumDialog";
 
 export function Game() {
   const [viewBoardId, setViewBoardId] = useState<number | undefined>(undefined);
@@ -32,11 +35,18 @@ export function Game() {
   const [tokenDialog, setTokenDialog] = useState<TokenDialogState>(null);
   const [initiativeOpen, setInitiativeOpen] = useState(false);
   const [usersOpen, setUsersOpen] = useState(false);
+  const [compendiumOpen, setCompendiumOpen] = useState(false);
+  const [charactersOpen, setCharactersOpen] = useState(false);
+  const [notesOpen, setNotesOpen] = useState(false);
 
   const moveMutation = api.tokens.move.useMutation();
   const updateMutation = api.tokens.update.useMutation();
   const adjustHpMutation = api.tokens.adjustHp.useMutation();
   const createBoardMutation = api.boards.create.useMutation();
+  const characterCardsQuery = api.compendium.list.useQuery(
+    { type: "character" },
+    { enabled: charactersOpen, retry: 1, refetchOnWindowFocus: true },
+  );
 
   const isMaster = data?.me.gameRole === "master";
 
@@ -137,6 +147,9 @@ export function Game() {
         onAddToken={() => setTokenDialog({ mode: "add" })}
         onOpenInitiative={() => setInitiativeOpen(true)}
         onOpenUsers={() => setUsersOpen(true)}
+        onOpenCompendium={() => setCompendiumOpen(true)}
+        onOpenCharacters={() => setCharactersOpen(true)}
+        onOpenNotes={() => setNotesOpen(true)}
       />
 
       {wsStatus !== "open" ? (
@@ -293,6 +306,15 @@ export function Game() {
       {isMaster && tokenDialog && board ? (
         <TokenDialog state={tokenDialog} board={board} onClose={() => setTokenDialog(null)} />
       ) : null}
+
+      <CompendiumDialog open={compendiumOpen} onOpenChange={setCompendiumOpen} me={data.me} />
+      <CharactersDialog
+        open={charactersOpen}
+        onOpenChange={setCharactersOpen}
+        me={data.me}
+        characterCards={characterCardsQuery.data?.items ?? []}
+      />
+      <NotesDialog open={notesOpen} onOpenChange={setNotesOpen} />
 
       {isMaster ? (
         <UsersDialog open={usersOpen} onOpenChange={setUsersOpen} me={data.me} />

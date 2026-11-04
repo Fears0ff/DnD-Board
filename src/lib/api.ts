@@ -8,6 +8,30 @@ import type {
   TokenUpdateInput,
   UserDto,
 } from "./game-contract";
+import type {
+  CharacterCreateInput,
+  CharacterDto,
+  CharacterSummaryDto,
+  CharacterUpdateInput,
+} from "@contracts/characters";
+import type {
+  NoteCreateInput,
+  NoteDto,
+  NoteSummaryDto,
+  NoteUpdateInput,
+} from "@contracts/notes";
+import type { MediaAssetDto, UploadImageInput } from "@contracts/media";
+import type {
+  CompendiumCopyInput,
+  CompendiumCreateInput,
+  CompendiumGetResultDto,
+  CompendiumImportResultDto,
+  CompendiumListInput,
+  CompendiumListResultDto,
+  CompendiumMutationResultDto,
+  CompendiumRemoveResultDto,
+  CompendiumUpdateInput,
+} from "@contracts/compendium";
 
 /**
  * Типизированный фасад поверх tRPC-proxy.
@@ -85,6 +109,7 @@ export interface ApiFacade {
     rename: MutationHook<{ id: number; name: string }, unknown>;
     remove: MutationHook<{ id: number }, unknown>;
     setActive: MutationHook<{ id: number }, unknown>;
+    setBackground: MutationHook<{ id: number; imageKey: string | null }, unknown>;
   };
   tokens: {
     add: MutationHook<TokenAddInput, unknown>;
@@ -96,6 +121,32 @@ export interface ApiFacade {
   };
   initiative: {
     set: MutationHook<{ entries: InitiativeEntry[]; boardId?: number }, unknown>;
+  };
+  characters: {
+    list: QueryHook<undefined, CharacterSummaryDto[]>;
+    get: QueryHook<{ id: number }, CharacterDto>;
+    create: MutationHook<CharacterCreateInput, CharacterDto>;
+    update: MutationHook<CharacterUpdateInput, CharacterDto>;
+    remove: MutationHook<{ id: number }, { removedId: number }>;
+  };
+  notes: {
+    list: QueryHook<undefined, NoteSummaryDto[]>;
+    get: QueryHook<{ id: number }, NoteDto>;
+    create: MutationHook<NoteCreateInput, NoteDto>;
+    update: MutationHook<NoteUpdateInput, NoteDto>;
+    remove: MutationHook<{ id: number }, { removedId: number }>;
+  };
+  media: {
+    uploadImage: MutationHook<UploadImageInput, MediaAssetDto>;
+  };
+  compendium: {
+    list: QueryHook<CompendiumListInput | undefined, CompendiumListResultDto>;
+    get: QueryHook<{ id: number }, CompendiumGetResultDto>;
+    create: MutationHook<CompendiumCreateInput, CompendiumMutationResultDto>;
+    update: MutationHook<CompendiumUpdateInput, CompendiumMutationResultDto>;
+    remove: MutationHook<{ id: number }, CompendiumRemoveResultDto>;
+    copy: MutationHook<CompendiumCopyInput, CompendiumMutationResultDto>;
+    importJson: MutationHook<{ json: string }, CompendiumImportResultDto>;
   };
 }
 
@@ -110,6 +161,7 @@ void _facadeMatchesRouter;
 export const authMeKey = [["auth", "me"]] as const;
 export const gameStateKey = [["game", "state"]] as const;
 export const usersListKey = [["users", "list"]] as const;
+export const compendiumListKey = [["compendium", "list"]] as const;
 
 export function invalidateGameState(): void {
   void queryClient.invalidateQueries({ queryKey: [...gameStateKey] });

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { BoardDto, TokenDto, TokenKind } from "@/lib/game-contract";
+import { boardImageUrl } from "@/lib/media";
 import {
   cellAtWorld,
   fitView,
@@ -105,6 +106,66 @@ function initials(label: string): string {
   return (parts[0][0] + parts[1][0]).toUpperCase();
 }
 
+/* --------------------- кэш изображений по стабильному ключу ---------------------
+ * Ключ медиа-ресурса неизменяем (сервер отдаёт immutable cache), поэтому
+ * загруженный Bitmap/ Image живёт в модульном кэше вечно (с лимитом). Пока
+ * изображение грузится или упало, canvas рисует прежнюю заглушку, а onload
+ * помечает кадр грязным — перерисовка после загрузки. */
+
+interface CachedImage {
+  status: "loading" | "ready" | "error";
+  img: HTMLImageElement;
+  listeners: Set<() => void>;
+}
+
+const imageCache = new Map<string, CachedImage>();
+const IMAGE_CACHE_LIMIT = 128;
+
+function requestImage(key: string, onChange: () => void): CachedImage {
+  let entry = imageCache.get(key);
+  if (!entry) {
+    const img = new Image();
+    const created: CachedImage = { status: "loading", img, listeners: new Set() };
+    img.onload = () => {
+      created.status = "ready";
+      created.listeners.forEach((fn) => fn());
+      created.listeners.clear();
+    };
+    img.onerror = () => {
+      created.status = "error";
+      created.listeners.forEach((fn) => fn());
+      created.listeners.clear();
+    };
+    img.src = boardImageUrl(key);
+    imageCache.set(key, created);
+    if (imageCache.size > IMAGE_CACHE_LIMIT) {
+      const oldest = imageCache.keys().next().value;
+      if (oldest !== undefined) imageCache.delete(oldest);
+    }
+    entry = created;
+  }
+  if (entry.status === "loading") entry.listeners.add(onChange);
+  return entry;
+}
+
+/** Cover-отрисовка изображения в прямоугольник (без искажения пропорций). */
+function drawCover(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+): void {
+  const iw = img.naturalWidth;
+  const ih = img.naturalHeight;
+  if (iw <= 0 || ih <= 0) return;
+  const scale = Math.max(w / iw, h / ih);
+  const dw = iw * scale;
+  const dh = ih * scale;
+  ctx.drawImage(img, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
+}
+
 interface DragState {
   tokenId: number;
   pointerId: number;
@@ -203,7 +264,8 @@ export function BoardCanvas(props: BoardCanvasProps) {
       ctx.translate(view.x, view.y);
       ctx.scale(view.scale, view.scale);
 
-      // фон поля (процедурная текстура)
+      // фон поля: процедурная текстура как база (и заглушка при загрузке/
+      // ошибке), загруженное изображение — поверх, когда готово
       if (!bgRef.current || bgRef.current.boardId !== p.board.id) {
         bgRef.current = { boardId: p.board.id, tile: createBackgroundTile(p.board.id) };
       }
@@ -218,6 +280,10 @@ export function BoardCanvas(props: BoardCanvasProps) {
       } else {
         ctx.fillStyle = "#1c2a22";
         ctx.fillRect(0, 0, boardW, boardH);
+      }
+      if (p.board.backgroundKey) {
+        const bg = requestImage(p.board.backgroundKey, markDirty);
+        if (bg.status === "ready") drawCover(ctx, bg.img, 0, 0, boardW, boardH);
       }
 
       // сетка поверх фона
@@ -273,24 +339,39 @@ export function BoardCanvas(props: BoardCanvasProps) {
         ctx.fillStyle = "rgba(0,0,0,0.35)";
         ctx.fill();
 
-        // тело
+        // тело: цветной круг как база; загруженное изображение — поверх,
+        // обрезанное по кругу; инициалы только без готового изображения
+        const alpha = isDragged ? 0.85 : pending ? 0.75 : 1;
         ctx.beginPath();
         ctx.arc(cx, cy, r, 0, Math.PI * 2);
         ctx.fillStyle = colors.fill;
-        ctx.globalAlpha = isDragged ? 0.85 : pending ? 0.75 : 1;
+        ctx.globalAlpha = alpha;
         ctx.fill();
+        const tokenImage = t.imageKey ? requestImage(t.imageKey, markDirty) : null;
+        if (tokenImage?.status === "ready") {
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(cx, cy, r, 0, Math.PI * 2);
+          ctx.clip();
+          drawCover(ctx, tokenImage.img, cx - r, cy - r, r * 2, r * 2);
+          ctx.restore();
+        }
         ctx.globalAlpha = 1;
         ctx.lineWidth = selected ? 3 / view.scale : 1.5 / view.scale;
         ctx.strokeStyle = selected ? "#d7e6d2" : colors.ring;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
         ctx.stroke();
 
         // инициалы
-        const fontSize = Math.min(r * 0.9, Math.max(9, 14 / view.scale));
-        ctx.fillStyle = colors.text;
-        ctx.font = `600 ${fontSize}px system-ui, sans-serif`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(initials(t.label), cx, cy);
+        if (tokenImage?.status !== "ready") {
+          const fontSize = Math.min(r * 0.9, Math.max(9, 14 / view.scale));
+          ctx.fillStyle = colors.text;
+          ctx.font = `600 ${fontSize}px system-ui, sans-serif`;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(initials(t.label), cx, cy);
+        }
 
         // HP-бар над токеном
         if (t.hp !== null && t.maxHp !== null && t.maxHp > 0) {

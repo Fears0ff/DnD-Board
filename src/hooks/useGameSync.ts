@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, gameStateKey, type QueryResult } from "@/lib/api";
+import { api, compendiumListKey, gameStateKey, type QueryResult } from "@/lib/api";
 import { queryClient } from "@/providers/trpc";
 import { GameRealtime, realtimeUrl, type RealtimeStatus } from "@/lib/realtime";
 import type { GameStateDto } from "@/lib/game-contract";
@@ -40,8 +40,13 @@ export function useGameSync(enabled: boolean, boardId?: number): GameSync {
     const offOpen = rt.onOpen(() => {
       // закрываем окно между HTTP-снимком и подпиской
       void queryClient.invalidateQueries({ queryKey: [...gameStateKey] });
+      void queryClient.invalidateQueries({ queryKey: [...compendiumListKey] });
     });
     const offMessage = rt.onMessage((msg) => {
+      if (msg.type === "compendium.changed") {
+        void queryClient.invalidateQueries({ queryKey: [...compendiumListKey] });
+        return;
+      }
       if (msg.type !== "game.changed") return;
       const applied = appliedRevisionRef.current;
       if (

@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "size": {
+      "default": "medium",
+      "type": "string",
+      "enum": [
+        "small",
+        "medium"
+      ]
+    },
+    "speed": {
+      "default": 30,
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000
+    },
+    "traits": {
+      "default": [],
+      "maxItems": 50,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "text": {
+            "default": "",
+            "type": "string",
+            "maxLength": 5000
+          }
+        },
+        "required": [
+          "name"
+        ]
+      }
+    },
+    "description": {
+      "default": "",
+      "type": "string",
+      "maxLength": 20000
+    }
+  },
+  "description": "DnD Board compendium v1: species card data",
+  "$id": "https://dnd-board.local/import-schemas/v1/species.json",
+  "title": "DnD Board compendium species card (v1)"
+}

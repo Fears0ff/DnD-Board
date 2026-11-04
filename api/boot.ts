@@ -9,6 +9,8 @@ import { log } from "./lib/logger";
 import { handleClientLog } from "./lib/clientlog";
 import { REQUEST_ID_HEADER, runWithRequestId } from "./lib/requestcontext";
 import { getDb, getSqlite } from "../db/connection";
+import { handleBoardImage } from "./routes/media";
+import { cleanupOrphanedAssets } from "./services/mediaService";
 
 const app = new Hono<{ Bindings: HttpBindings }>();
 
@@ -89,6 +91,7 @@ app.get("/api/health", (c) => {
     return c.json({ ok: false, status: "unavailable" }, 503);
   }
 });
+app.get("/api/board-image", handleBoardImage);
 app.all("/api/*", (c) => c.json({ error: "Not Found" }, 404));
 
 // Unhandled request errors must reach /tmp/kimi-logs/app.log, not just stdout:
@@ -118,7 +121,12 @@ if (env.isProduction) {
   // Apply pending migrations BEFORE accepting traffic; a failed migration
   // throws here and the process must fail loudly instead of serving a
   // half-migrated game.
-  getDb();
+  const db = getDb();
+  void cleanupOrphanedAssets(db);
+  const mediaCleanupTimer = setInterval(() => {
+    void cleanupOrphanedAssets(db);
+  }, 60 * 60 * 1000);
+  mediaCleanupTimer.unref();
 
   const port = parseInt(process.env.PORT || "3000");
   startHttpServer(app, port);

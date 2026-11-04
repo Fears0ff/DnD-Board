@@ -53,6 +53,7 @@ try {
     DATABASE_URL: "sqlite://local",
     SQLITE_PATH: path.join(temp, "test.db"),
     LOCAL_STORAGE_DIR: path.join(temp, "uploads"),
+    MEDIA_STORAGE_BACKEND: "local",
   };
   server = spawn(process.execPath, ["dist/boot.js"], { cwd: root, env, stdio: "inherit" });
   server.once("exit", (code) => {
