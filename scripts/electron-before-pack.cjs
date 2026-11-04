@@ -1,5 +1,24 @@
 const fs = require("node:fs");
 const path = require("node:path");
+const util = require("node:util");
+
+function capturePackagingOutput() {
+  const output = [];
+  const methods = ["log", "warn", "error"];
+  const original = Object.fromEntries(methods.map((name) => [name, console[name]]));
+  for (const name of methods) {
+    console[name] = (...args) => {
+      original[name](...args);
+      output.push(util.format(...args));
+    };
+  }
+  process.once("exit", (code) => {
+    if (code === 0) return;
+    const details = output.join("\n").trim().slice(-24000) ||
+      `electron-builder exited with code ${code}.`;
+    original.error(`::error title=Windows installer packaging::${annotationText(details)}`);
+  });
+}
 
 function annotationText(error) {
   return String(error instanceof Error ? error.stack : error)
@@ -16,6 +35,7 @@ function annotationText(error) {
  */
 module.exports = async function beforePack(context) {
   try {
+    capturePackagingOutput();
     console.log("::notice title=Desktop packaging::beforePack started");
     if (context.electronPlatformName !== "win32") {
       throw new Error("DnD Board desktop releases are supported only on native Windows runners.");
