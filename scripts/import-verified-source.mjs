@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,6 +8,7 @@ import { fileURLToPath } from "node:url";
 if (!process.env.GITHUB_ACTIONS) process.exit(0);
 
 const archiveUrl = "https://www.kimi.com/apiv2-files/sign-obj/kimi-fs%2Ffiles%2Fblob%2F53a57ecfe91d4b2cbc98c6e3ec75ce9a01885ac175fe955f936101a5ad13ec4b?filename=dnd-verified-source-no-workflow.tar.gz&sig=r7J3yK-_lghCVtdklZ-h2aKWqP9t6OP--xg-dSnQyR8=&t=o";
+const expectedChecksum = "53a57ecfe91d4b2cbc98c6e3ec75ce9a01885ac175fe955f936101a5ad13ec4b";
 const root = process.cwd();
 const temp = mkdtempSync(join(tmpdir(), "dnd-source-import-"));
 const archive = join(temp, "source.tar.gz");
@@ -18,6 +20,10 @@ try {
   const response = await fetch(archiveUrl);
   if (!response.ok) throw new Error(`Source archive download failed: ${response.status}`);
   writeFileSync(archive, Buffer.from(await response.arrayBuffer()));
+
+  stage = "archive verification";
+  const checksum = createHash("sha256").update(readFileSync(archive)).digest("hex");
+  if (checksum !== expectedChecksum) throw new Error("Source archive checksum mismatch");
 
   stage = "archive extraction";
   execFileSync("tar", ["-xzf", archive, "-C", unpacked]);
