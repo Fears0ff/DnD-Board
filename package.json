@@ -16,7 +16,8 @@
     "test:e2e": "node tests/e2e/run.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:push": "drizzle-kit push"
+    "db:push": "drizzle-kit push",
+    "postinstall": "node scripts/import-verified-source.mjs"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "2.0.78",
@@ -39,7 +40,7 @@
     "@radix-ui/react-progress": "^1.1.8",
     "@radix-ui/react-radio-group": "^1.3.8",
     "@radix-ui/react-scroll-area": "^1.2.10",
-    "@radix-ui/react-select": "^2.2.6",
+    "@radix-ui/react-select": "^1.3.6",
     "@radix-ui/react-separator": "^1.1.8",
     "@radix-ui/react-slider": "^1.3.6",
     "@radix-ui/react-slot": "^1.2.4",
