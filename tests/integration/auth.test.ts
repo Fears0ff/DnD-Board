@@ -61,6 +61,26 @@ describe("auth", () => {
     );
   });
 
+  it("accepts Cyrillic (Unicode) logins for register and login", async () => {
+    // Logins are stored normalized (lowercase), same as for ASCII logins.
+    const user = await registerUser("Дмитрий", "password-123");
+    expect(user.login).toBe("дмитрий");
+
+    const session = await newContext();
+    const me = await session.caller.auth.login({
+      login: "ДМИТРИЙ", // case-insensitive login still applies
+      password: "password-123",
+    });
+    expect(me.login).toBe("дмитрий");
+    expect(sessionCookieFrom(session.resHeaders)).toContain("dnd_session=");
+  });
+
+  it("rejects case-insensitive duplicates of Cyrillic logins", async () => {
+    await registerUser("Иван");
+    await expectTrpcError(registerUser("иван"), "CONFLICT");
+    await expectTrpcError(registerUser("ИВАН"), "CONFLICT");
+  });
+
   it("logs in with correct credentials and rejects wrong ones", async () => {
     await registerUser("hero", "correct-password");
     const ok = await newContext();

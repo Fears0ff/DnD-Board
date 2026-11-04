@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
+import type { FetchCreateContextFnOptions } from "@trpc/server/adapters/fetch";
+import { appRouter } from "../../api/router";
+import { createContext } from "../../api/context";
 import {
   expectTrpcError,
   newContext,
@@ -407,5 +411,321 @@ describe("revisions", () => {
     expect(revisions).toEqual([1, 2, 3, 4]);
     const state = await dm.game.state();
     expect(state.revision).toBe(4);
+  });
+});
+
+describe("game.state viewed board", () => {
+  async function twoBoardsWithContent() {
+    const first = await createBoard("One"); // active automatically
+    const dm = await masterCaller();
+    const firstToken = (
+      await dm.tokens.add({ kind: "hero", label: "A", hp: 3, maxHp: 5 })
+    ).token;
+    await dm.initiative.set({ entries: [{ tokenId: firstToken.id, value: 10 }] });
+
+    const second = await dm.boards.create({ name: "Two" });
+    await dm.boards.setActive({ id: second.board.id });
+    const secondToken = (
+      await dm.tokens.add({ kind: "monster", label: "B", hp: 8, maxHp: 12 })
+    ).token;
+    await dm.initiative.set({ entries: [{ tokenId: secondToken.id, value: 4 }] });
+
+    // Board One is globally active again; board Two is not.
+    await dm.boards.setActive({ id: first.board.id });
+    return { dm, first, second, firstToken, secondToken };
+  }
+
+  it("lets the master view a non-active board while activeBoard stays global", async () => {
+    const { dm, first, second, firstToken, secondToken } =
+      await twoBoardsWithContent();
+
+    const state = await dm.game.state({ boardId: second.board.id });
+    expect(state.activeBoard?.id).toBe(first.board.id);
+    expect(state.viewedBoard?.id).toBe(second.board.id);
+    expect(state.tokens.map((t) => t.id)).toEqual([secondToken.id]);
+    expect(state.initiative).toEqual([{ tokenId: secondToken.id, value: 4 }]);
+
+    // Without input the master views the active board as before.
+    const fallback = await dm.game.state();
+    expect(fallback.activeBoard?.id).toBe(first.board.id);
+    expect(fallback.viewedBoard?.id).toBe(first.board.id);
+    expect(fallback.initiative).toEqual([{ tokenId: firstToken.id, value: 10 }]);
+  });
+
+  it("players always view the active board, even when requesting another", async () => {
+    const { second, firstToken } = await twoBoardsWithContent();
+    const pc = await playerCaller();
+
+    const state = await pc.game.state({ boardId: second.board.id });
+    expect(state.activeBoard?.id).not.toBe(second.board.id);
+    expect(state.viewedBoard?.id).toBe(state.activeBoard?.id);
+    expect(state.tokens.map((t) => t.id)).toEqual([firstToken.id]);
+    expect(state.initiative).toEqual([{ tokenId: firstToken.id, value: 10 }]);
+  });
+
+  it("is 404 when the master requests a missing board", async () => {
+    const dm = await masterCaller();
+    await expectTrpcError(dm.game.state({ boardId: 9999 }), "NOT_FOUND");
+  });
+});
+
+describe("game.state HP privacy", () => {
+  it("shows HP to the master and the owner, hides it from everyone else", async () => {
+    await createBoard();
+    const dm = await masterCaller();
+    const own = (
+      await dm.tokens.add({
+        kind: "hero",
+        label: "Mine",
+        ownerId: player.id,
+        hp: 5,
+        maxHp: 10,
+      })
+    ).token;
+    const foreign = (
+      await dm.tokens.add({
+        kind: "monster",
+        label: "Theirs",
+        ownerId: master.id,
+        hp: 7,
+        maxHp: 12,
+      })
+    ).token;
+    const unowned = (
+      await dm.tokens.add({ kind: "prop", label: "Rock", hp: 1, maxHp: 2 })
+    ).token;
+
+    // The master sees every token's HP.
+    const masterState = await dm.game.state();
+    for (const t of masterState.tokens) {
+      expect(t.hp).not.toBeNull();
+      expect(t.maxHp).not.toBeNull();
+    }
+
+    // A player sees HP only for tokens they own.
+    const pc = await playerCaller();
+    const playerState = await pc.game.state();
+    const byId = new Map(playerState.tokens.map((t) => [t.id, t]));
+    expect(byId.get(own.id)).toMatchObject({ hp: 5, maxHp: 10 });
+    expect(byId.get(foreign.id)).toMatchObject({ hp: null, maxHp: null });
+    expect(byId.get(unowned.id)).toMatchObject({ hp: null, maxHp: null });
+    // Other fields are still visible; only HP is hidden.
+    expect(byId.get(foreign.id)?.label).toBe("Theirs");
+  });
+});
+
+describe("tokens.adjustHp", () => {
+  it("adjusts hp up and down, clamps to [0, maxHp], and bumps the revision", async () => {
+    await createBoard();
+    const dm = await masterCaller();
+    const { token } = await dm.tokens.add({
+      kind: "hero",
+      label: "x",
+      hp: 5,
+      maxHp: 10,
+    });
+
+    const hurt = await dm.tokens.adjustHp({ id: token.id, delta: -3 });
+    expect(hurt.token.hp).toBe(2);
+
+    const healed = await dm.tokens.adjustHp({ id: token.id, delta: 4 });
+    expect(healed.token.hp).toBe(6);
+    expect(healed.revision).toBeGreaterThan(hurt.revision);
+
+    const overHealed = await dm.tokens.adjustHp({ id: token.id, delta: 999 });
+    expect(overHealed.token.hp).toBe(10);
+
+    const overKilled = await dm.tokens.adjustHp({ id: token.id, delta: -999 });
+    expect(overKilled.token.hp).toBe(0);
+
+    const state = await dm.game.state();
+    expect(state.revision).toBe(overKilled.revision);
+    expect(state.tokens.find((t) => t.id === token.id)?.hp).toBe(0);
+  });
+
+  it("adjusts HP on tokens of a non-active board (master management)", async () => {
+    const first = await createBoard("One");
+    const dm = await masterCaller();
+    const { token } = await dm.tokens.add({
+      kind: "hero",
+      label: "x",
+      hp: 5,
+      maxHp: 10,
+    });
+    expect(token.boardId).toBe(first.board.id);
+
+    const second = await dm.boards.create({ name: "Two" });
+    await dm.boards.setActive({ id: second.board.id });
+
+    // Board activity only controls what players see; the master edits any board.
+    const adjusted = await dm.tokens.adjustHp({ id: token.id, delta: -2 });
+    expect(adjusted.token.hp).toBe(3);
+
+    // Clamping still applies off the active board, revision bumps each time.
+    const clamped = await dm.tokens.adjustHp({ id: token.id, delta: -999 });
+    expect(clamped.token.hp).toBe(0);
+    expect(clamped.revision).toBeGreaterThan(adjusted.revision);
+
+    const viewed = await dm.game.state({ boardId: first.board.id });
+    expect(viewed.activeBoard?.id).toBe(second.board.id);
+    expect(viewed.tokens.find((t) => t.id === token.id)?.hp).toBe(0);
+  });
+
+  it("is master-only, even for a token the player owns", async () => {
+    await createBoard();
+    const dm = await masterCaller();
+    const { token } = await dm.tokens.add({
+      kind: "hero",
+      label: "x",
+      ownerId: player.id,
+      hp: 5,
+      maxHp: 10,
+    });
+    const pc = await playerCaller();
+    await expectTrpcError(
+      pc.tokens.adjustHp({ id: token.id, delta: -1 }),
+      "FORBIDDEN",
+    );
+  });
+
+  it("is 404 for a missing token", async () => {
+    const dm = await masterCaller();
+    await expectTrpcError(dm.tokens.adjustHp({ id: 9999, delta: 1 }), "NOT_FOUND");
+  });
+});
+
+describe("editing a chosen non-active board", () => {
+  it("adds a token to a non-active board via boardId without changing activeBoard", async () => {
+    const first = await createBoard("One"); // active
+    const dm = await masterCaller();
+    const second = await dm.boards.create({ name: "Two" });
+
+    const added = await dm.tokens.add({
+      kind: "monster",
+      label: "Off-board",
+      hp: 4,
+      maxHp: 9,
+      boardId: second.board.id,
+    });
+    expect(added.token.boardId).toBe(second.board.id);
+
+    const viewed = await dm.game.state({ boardId: second.board.id });
+    expect(viewed.activeBoard?.id).toBe(first.board.id);
+    expect(viewed.tokens.map((t) => t.id)).toContain(added.token.id);
+
+    // The active board (what players see) is untouched.
+    const active = await dm.game.state();
+    expect(active.activeBoard?.id).toBe(first.board.id);
+    expect(active.tokens.map((t) => t.id)).not.toContain(added.token.id);
+  });
+
+  it("tokens.add without boardId still uses the active board", async () => {
+    const first = await createBoard("One");
+    const dm = await masterCaller();
+    const added = await dm.tokens.add({
+      kind: "hero",
+      label: "x",
+      hp: 1,
+      maxHp: 1,
+    });
+    expect(added.token.boardId).toBe(first.board.id);
+  });
+
+  it("tokens.add with a missing boardId is 404", async () => {
+    await createBoard();
+    const dm = await masterCaller();
+    await expectTrpcError(
+      dm.tokens.add({
+        kind: "hero",
+        label: "x",
+        hp: 1,
+        maxHp: 1,
+        boardId: 4242,
+      }),
+      "NOT_FOUND",
+    );
+  });
+
+  it("sets initiative on a chosen non-active board", async () => {
+    const first = await createBoard("One");
+    const dm = await masterCaller();
+    const { token } = await dm.tokens.add({
+      kind: "hero",
+      label: "x",
+      hp: 1,
+      maxHp: 1,
+    }); // lives on board One
+    const second = await dm.boards.create({ name: "Two" });
+    await dm.boards.setActive({ id: second.board.id });
+
+    const set = await dm.initiative.set({
+      entries: [{ tokenId: token.id, value: 7 }],
+      boardId: first.board.id,
+    });
+    expect(set.initiative).toEqual([{ tokenId: token.id, value: 7 }]);
+
+    const viewed = await dm.game.state({ boardId: first.board.id });
+    expect(viewed.initiative).toEqual([{ tokenId: token.id, value: 7 }]);
+    expect(viewed.activeBoard?.id).toBe(second.board.id);
+
+    // The active board's initiative is untouched.
+    const active = await dm.game.state();
+    expect(active.initiative).toEqual([]);
+  });
+
+  it("rejects initiative entries referencing tokens of another board (explicit boardId)", async () => {
+    await createBoard("One");
+    const dm = await masterCaller();
+    const { token } = await dm.tokens.add({
+      kind: "hero",
+      label: "x",
+      hp: 1,
+      maxHp: 1,
+    }); // lives on board One
+    const second = await dm.boards.create({ name: "Two" });
+    await expectTrpcError(
+      dm.initiative.set({
+        entries: [{ tokenId: token.id, value: 5 }],
+        boardId: second.board.id,
+      }),
+      "BAD_REQUEST",
+    );
+  });
+
+  it("initiative.set with a missing boardId is 404", async () => {
+    const dm = await masterCaller();
+    await expectTrpcError(
+      dm.initiative.set({ entries: [], boardId: 4242 }),
+      "NOT_FOUND",
+    );
+  });
+});
+
+describe("game.state HTTP compatibility", () => {
+  it("accepts legacy null input as well as no input", async () => {
+    await createBoard();
+    const get = (suffix: string) =>
+      fetchRequestHandler({
+        endpoint: "/api/trpc",
+        req: new Request(`http://test.local/api/trpc/game.state${suffix}`, {
+          headers: { host: "test.local", cookie: master.cookie },
+        }),
+        router: appRouter,
+        createContext: (opts) =>
+          createContext({
+            req: opts.req,
+            resHeaders: new Headers(),
+          } as FetchCreateContextFnOptions),
+      });
+
+    const nullInput = `?input=${encodeURIComponent(JSON.stringify({ json: null }))}`;
+    for (const suffix of ["", nullInput]) {
+      const res = await get(suffix);
+      expect(res.status).toBe(200);
+      const payload = (await res.json()) as {
+        result?: { data?: { json?: { activeBoard?: { name?: string } | null } } };
+      };
+      expect(payload.result?.data?.json?.activeBoard?.name).toBe("Dungeon");
+    }
   });
 });
