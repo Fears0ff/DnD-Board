@@ -4,6 +4,20 @@ const path = require("node:path");
 function capturePackagingOutput() {
   const output = [];
   const stderr = process.stderr.write.bind(process.stderr);
+  const { log } = require("builder-util");
+  const logError = log.error.bind(log);
+  log.error = (fields, message) => {
+    const error = message === undefined ? fields : [fields, message];
+    stderr(`::error title=Windows installer error::${annotationText(error)}\n`);
+    return logError(fields, message);
+  };
+  const logWarning = log.warn.bind(log);
+  log.warn = (fields, message) => {
+    if (message === "duplicate dependency references") {
+      return;
+    }
+    return logWarning(fields, message);
+  };
   for (const stream of [process.stdout, process.stderr]) {
     const write = stream.write.bind(stream);
     stream.write = (chunk, encoding, callback) => {
@@ -11,16 +25,20 @@ function capturePackagingOutput() {
       return write(chunk, encoding, callback);
     };
   }
-  process.once("exit", () => {
-    const details = output.join("").trim().slice(-6000);
-    if (details) {
-      stderr(`::notice title=Windows installer output::${annotationText(details)}\n`);
+  process.once("exit", (code) => {
+    if (code === 0) {
+      return;
     }
+    const details = output.join("").trim().slice(-4000);
+    stderr(`::notice title=Windows installer exit::code=${code}%0A${annotationText(details)}\n`);
   });
 }
 
 function annotationText(error) {
-  return String(error instanceof Error ? error.stack : error)
+  const text = Array.isArray(error)
+    ? error.map((item) => (item instanceof Error ? item.stack : String(item))).join(" ")
+    : String(error instanceof Error ? error.stack : error);
+  return text
     .replaceAll("%", "%25")
     .replaceAll("\r", "%0D")
     .replaceAll("\n", "%0A");
