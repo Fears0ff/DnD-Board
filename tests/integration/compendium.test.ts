@@ -533,13 +533,15 @@ describe("compendium", () => {
     expect(broadcasts).toEqual([created.compendiumRevision]);
   });
 
-  it("committed JSON schemas match the Zod contracts byte-for-byte", () => {
+  it("committed JSON schemas match the Zod contracts regardless of checkout EOL", () => {
     const expected = buildCompendiumJsonSchemas();
     const dir = path.resolve(__dirname, "../../docs/import-schemas/v1");
     const onDisk = fs.readdirSync(dir).sort();
     expect(onDisk).toEqual(Object.keys(expected).sort());
     for (const [name, content] of Object.entries(expected)) {
-      expect(fs.readFileSync(path.join(dir, name), "utf8")).toBe(content);
+      const committed = fs.readFileSync(path.join(dir, name), "utf8");
+      // Git may materialize LF as CRLF on Windows without changing the schema.
+      expect(committed.replaceAll("\r\n", "\n")).toBe(content);
     }
     // Every published schema declares draft 2020-12.
     for (const name of onDisk) {

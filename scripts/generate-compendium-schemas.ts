@@ -4,9 +4,9 @@
  *
  *   npx vite-node scripts/generate-compendium-schemas.ts
  *
- * tests/integration/compendium.test.ts asserts the committed files are
- * byte-identical to this output, so a schema change without regeneration
- * fails CI.
+ * tests/integration/compendium.test.ts asserts the committed files match
+ * this output after normalizing platform checkout line endings, so a schema
+ * change without regeneration fails CI.
  */
 import fs from "node:fs";
 import path from "node:path";
