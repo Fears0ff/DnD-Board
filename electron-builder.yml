@@ -13,6 +13,7 @@ buildDependenciesFromSource: false
 # Build CI artifacts only; never create a GitHub Release implicitly.
 publish: null
 beforePack: scripts/electron-before-pack.cjs
+afterAllArtifactBuild: scripts/electron-after-all-artifact-build.cjs
 win:
   target:
     - target: nsis
