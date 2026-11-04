@@ -10,6 +10,8 @@ asarUnpack:
   - dist/node_modules/**/*
 npmRebuild: false
 buildDependenciesFromSource: false
+# Build CI artifacts only; never create a GitHub Release implicitly.
+publish: null
 beforePack: scripts/electron-before-pack.cjs
 win:
   target:
