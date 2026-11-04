@@ -73,7 +73,7 @@ export interface ApiFacade {
     setGameRole: MutationHook<{ userId: number; gameRole: GameRole }, unknown>;
   };
   game: {
-    state: QueryHook<undefined, GameStateDto>;
+    state: QueryHook<{ boardId?: number } | undefined, GameStateDto>;
   };
   // Игровые мутации возвращают конверт { …, revision }; фронтенд опирается
   // на перечитывание game.state, поэтому тип результата намеренно unknown.
@@ -89,12 +89,13 @@ export interface ApiFacade {
   tokens: {
     add: MutationHook<TokenAddInput, unknown>;
     update: MutationHook<TokenUpdateInput, unknown>;
+    adjustHp: MutationHook<{ id: number; delta: number }, unknown>;
     move: MutationHook<{ tokenId: number; cellX: number; cellY: number }, unknown>;
     remove: MutationHook<{ id: number }, unknown>;
     clear: MutationHook<{ boardId: number }, unknown>;
   };
   initiative: {
-    set: MutationHook<{ entries: InitiativeEntry[] }, unknown>;
+    set: MutationHook<{ entries: InitiativeEntry[]; boardId?: number }, unknown>;
   };
 }
 

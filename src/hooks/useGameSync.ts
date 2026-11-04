@@ -18,10 +18,10 @@ export interface GameSync {
  * - пока WS не открыт — polling game.state каждые 4 секунды;
  * - после восстановления WS полный refetch, polling останавливается.
  */
-export function useGameSync(enabled: boolean): GameSync {
+export function useGameSync(enabled: boolean, boardId?: number): GameSync {
   const [wsStatus, setWsStatus] = useState<RealtimeStatus>("closed");
 
-  const query = api.game.state.useQuery(undefined, {
+  const query = api.game.state.useQuery(boardId ? { boardId } : undefined, {
     enabled,
     retry: 1,
     refetchOnWindowFocus: true,
