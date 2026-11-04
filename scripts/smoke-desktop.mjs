@@ -9,7 +9,7 @@ if (process.platform !== "win32") {
 
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "dnd-board-desktop-smoke-"));
 const marker = path.join(temporary, "healthy.txt");
-const electron = path.resolve("node_modules", ".bin", "electron.cmd");
+const electron = path.resolve("node_modules", "electron", "dist", "electron.exe");
 const child = spawn(electron, ["."], {
   cwd: process.cwd(),
   env: {
@@ -53,8 +53,11 @@ const timeout = setTimeout(() => {
 }, 60_000);
 
 try {
-  const code = await new Promise((resolve, reject) => {
-    child.once("error", reject);
+  const code = await new Promise((resolve) => {
+    child.once("error", (error) => {
+      output += `${error.stack ?? error.message}\n`;
+      resolve(1);
+    });
     child.once("exit", resolve);
   });
   if (code !== 0 || !fs.existsSync(marker)) {
