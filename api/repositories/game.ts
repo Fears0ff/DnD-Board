@@ -34,6 +34,8 @@ export function toTokenDto(row: TokenRow): TokenDto {
     kind: row.kind,
     label: row.label,
     ownerId: row.ownerId,
+    characterId: row.characterId,
+    compendiumId: row.compendiumId,
     cellX: row.cellX,
     cellY: row.cellY,
     hp: row.hp,
@@ -187,6 +189,8 @@ export function updateTokenRow(
       | "label"
       | "kind"
       | "ownerId"
+      | "characterId"
+      | "compendiumId"
       | "hp"
       | "maxHp"
       | "size"

@@ -53,10 +53,18 @@ export function TokenDialog({ state, board, onClose }: TokenDialogProps) {
   const [label, setLabel] = useState(token?.label ?? "");
   const [kind, setKind] = useState<TokenKind>(token?.kind ?? "hero");
   const [ownerId, setOwnerId] = useState<string>(token?.ownerId != null ? String(token.ownerId) : "none");
+  const [characterId, setCharacterId] = useState<string>(
+    token?.characterId != null ? String(token.characterId) : "none",
+  );
+  const [compendiumId, setCompendiumId] = useState<string>(
+    token?.compendiumId != null ? String(token.compendiumId) : "none",
+  );
   const [hp, setHp] = useState(token?.hp ?? 10);
   const [maxHp, setMaxHp] = useState(token?.maxHp ?? 10);
   const [size, setSize] = useState(token?.size ?? 1);
-  const [imageKey, setImageKey] = useState<string | null>(token?.imageKey ?? null);
+  const [imageKey, setImageKey] = useState<string | null>(
+    token?.compendiumId != null ? null : token?.imageKey ?? null,
+  );
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -67,10 +75,12 @@ export function TokenDialog({ state, board, onClose }: TokenDialogProps) {
     setLabel(token?.label ?? "");
     setKind(token?.kind ?? "hero");
     setOwnerId(token?.ownerId != null ? String(token.ownerId) : "none");
+    setCharacterId(token?.characterId != null ? String(token.characterId) : "none");
+    setCompendiumId(token?.compendiumId != null ? String(token.compendiumId) : "none");
     setHp(token?.hp ?? 10);
     setMaxHp(token?.maxHp ?? 10);
     setSize(token?.size ?? 1);
-    setImageKey(token?.imageKey ?? null);
+    setImageKey(token?.compendiumId != null ? null : token?.imageKey ?? null);
     setUploading(false);
     setConfirmDelete(false);
     setError(null);
@@ -78,6 +88,42 @@ export function TokenDialog({ state, board, onClose }: TokenDialogProps) {
   }, [state]);
 
   const usersQuery = api.users.list.useQuery(undefined, { enabled: true, retry: 1 });
+  const charactersQuery = api.characters.list.useQuery(undefined, {
+    enabled: kind === "hero",
+    retry: 1,
+  });
+  const monstersQuery = api.compendium.list.useQuery(
+    { type: "monster" },
+    { enabled: kind === "monster", retry: 1 },
+  );
+  const selectedCharacterId = characterId === "none" ? 0 : Number(characterId);
+  const heroDetailQuery = api.characters.get.useQuery(
+    { id: selectedCharacterId },
+    {
+      enabled: kind === "hero" && selectedCharacterId > 0,
+      retry: 1,
+    },
+  );
+
+  // Подтягиваем HP только для НОВОЙ привязки. Открытие редактора или refetch
+  // уже привязанного листа не должен перезаписывать ручные HP токена.
+  useEffect(() => {
+    const character = heroDetailQuery.data;
+    if (
+      kind !== "hero" ||
+      selectedCharacterId <= 0 ||
+      token?.characterId === selectedCharacterId ||
+      character?.id !== selectedCharacterId
+    ) {
+      return;
+    }
+    const fullHp = character.data.vitals.maxHp;
+    setMaxHp(fullHp);
+    setHp(fullHp);
+    setOwnerId(String(character.ownerId));
+    setLabel((current) => current.trim() ? current : character.name);
+  }, [heroDetailQuery.data, kind, selectedCharacterId, token?.characterId]);
+
   const addMutation = api.tokens.add.useMutation();
   const updateMutation = api.tokens.update.useMutation();
   const removeMutation = api.tokens.remove.useMutation();
@@ -88,6 +134,63 @@ export function TokenDialog({ state, board, onClose }: TokenDialogProps) {
     removeMutation.isPending ||
     uploadMutation.isPending ||
     uploading;
+  const selectedMonsterId = compendiumId === "none" ? 0 : Number(compendiumId);
+  const selectedMonster = (monstersQuery.data?.items ?? []).find(
+    (card) => card.id === selectedMonsterId,
+  );
+  const displayImageKey =
+    selectedMonsterId > 0
+      ? selectedMonster?.imageKey ??
+        (token?.compendiumId === selectedMonsterId ? token.imageKey : null)
+      : imageKey;
+
+  const changeKind = (next: TokenKind) => {
+    if (next === kind) return;
+    setKind(next);
+    setCharacterId("none");
+    setCompendiumId("none");
+    if (selectedMonsterId > 0) setImageKey(null);
+  };
+
+  const selectCharacter = (value: string) => {
+    setCharacterId(value);
+    setCompendiumId("none");
+    if (value === "none") return;
+    if (token?.characterId === Number(value)) {
+      setHp(token.hp ?? 0);
+      setMaxHp(token.maxHp ?? 0);
+      setOwnerId(token.ownerId != null ? String(token.ownerId) : "none");
+      return;
+    }
+    const character = (charactersQuery.data ?? []).find(
+      (item) => item.id === Number(value),
+    );
+    if (character) setOwnerId(String(character.ownerId));
+  };
+
+  const selectMonster = (value: string) => {
+    setCompendiumId(value);
+    setCharacterId("none");
+    setImageKey(null);
+    if (value === "none") return;
+    const monster = (monstersQuery.data?.items ?? []).find(
+      (card) => card.id === Number(value),
+    );
+    if (!monster || monster.type !== "monster") return;
+    // Возврат к исходной привязке отменяет временный выбор другой карточки.
+    if (token?.compendiumId === monster.id) {
+      setHp(token.hp ?? 0);
+      setMaxHp(token.maxHp ?? 0);
+      return;
+    }
+    const fullHp =
+      "hitPoints" in monster.data && typeof monster.data.hitPoints === "number"
+        ? monster.data.hitPoints
+        : 0;
+    setMaxHp(fullHp);
+    setHp(fullHp);
+    setLabel((current) => current.trim() ? current : monster.name);
+  };
 
   const pickImage = async (file: File | undefined) => {
     if (!file) return;
@@ -123,10 +226,26 @@ export function TokenDialog({ state, board, onClose }: TokenDialogProps) {
     const safeHp = clampHp(Math.floor(hp), safeMax);
     const safeSize = Math.max(1, Math.floor(size));
     const owner = ownerId === "none" ? null : Number(ownerId);
+    const linkedCharacterId =
+      kind === "hero" && characterId !== "none" ? Number(characterId) : null;
+    const linkedCompendiumId =
+      kind === "monster" && compendiumId !== "none" ? Number(compendiumId) : null;
+    const linkedImageKey = linkedCompendiumId !== null ? null : imageKey;
 
     if (isEdit && token) {
       updateMutation.mutate(
-        { id: token.id, label: trimmed, kind, ownerId: owner, hp: safeHp, maxHp: safeMax, size: safeSize, imageKey },
+        {
+          id: token.id,
+          label: trimmed,
+          kind,
+          ownerId: owner,
+          characterId: linkedCharacterId,
+          compendiumId: linkedCompendiumId,
+          hp: safeHp,
+          maxHp: safeMax,
+          size: safeSize,
+          imageKey: linkedImageKey,
+        },
         {
           onSuccess: () => { invalidateGameState(); onClose(); },
           onError: (e) => setError(trpcErrorMessage(e, "Не удалось сохранить токен")),
@@ -139,10 +258,12 @@ export function TokenDialog({ state, board, onClose }: TokenDialogProps) {
           label: trimmed,
           kind,
           ownerId: owner,
+          characterId: linkedCharacterId,
+          compendiumId: linkedCompendiumId,
           hp: safeHp,
           maxHp: safeMax,
           size: safeSize,
-          imageKey: imageKey ?? undefined,
+          imageKey: linkedImageKey ?? undefined,
           // новый токен появляется в центре просматриваемого поля
           cellX: Math.max(0, Math.floor((board.gridWidth - safeSize) / 2)),
           cellY: Math.max(0, Math.floor((board.gridHeight - safeSize) / 2)),
@@ -172,7 +293,7 @@ export function TokenDialog({ state, board, onClose }: TokenDialogProps) {
 
   return (
     <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="sm:max-w-sm">
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-sm">
         <DialogHeader>
           <DialogTitle className="text-sm">
             {isEdit ? `Токен «${token?.label}»` : "Новый токен"}
@@ -199,8 +320,8 @@ export function TokenDialog({ state, board, onClose }: TokenDialogProps) {
           <div className="grid grid-cols-2 gap-2">
             <div className="space-y-1.5">
               <Label className="text-xs">Тип</Label>
-              <Select value={kind} onValueChange={(v) => setKind(v as TokenKind)} disabled={pending}>
-                <SelectTrigger className="ui-hover h-8 text-xs">
+              <Select value={kind} onValueChange={(v) => changeKind(v as TokenKind)} disabled={pending}>
+                <SelectTrigger className="ui-hover h-8 text-xs" aria-label="Тип токена">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -213,9 +334,15 @@ export function TokenDialog({ state, board, onClose }: TokenDialogProps) {
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label className="text-xs">Владелец</Label>
-              <Select value={ownerId} onValueChange={setOwnerId} disabled={pending}>
-                <SelectTrigger className="ui-hover h-8 text-xs">
+              <Label className="text-xs">
+                {characterId !== "none" && kind === "hero" ? "Владелец (из листа)" : "Владелец"}
+              </Label>
+              <Select
+                value={ownerId}
+                onValueChange={setOwnerId}
+                disabled={pending || (kind === "hero" && characterId !== "none")}
+              >
+                <SelectTrigger className="ui-hover h-8 text-xs" aria-label="Владелец токена">
                   <SelectValue placeholder="Нет" />
                 </SelectTrigger>
                 <SelectContent>
@@ -229,6 +356,71 @@ export function TokenDialog({ state, board, onClose }: TokenDialogProps) {
               </Select>
             </div>
           </div>
+
+          {kind === "hero" ? (
+            <div className="space-y-1.5">
+              <Label className="text-xs">Лист героя</Label>
+              <Select value={characterId} onValueChange={selectCharacter} disabled={pending}>
+                <SelectTrigger className="ui-hover h-8 w-full text-xs" aria-label="Лист героя">
+                  <SelectValue placeholder="Без привязки" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none" className="text-xs">Без привязки</SelectItem>
+                  {(charactersQuery.data ?? []).map((character) => {
+                    const owner = (usersQuery.data ?? []).find(
+                      (user) => user.id === character.ownerId,
+                    );
+                    return (
+                      <SelectItem
+                        key={character.id}
+                        value={String(character.id)}
+                        className="text-xs"
+                      >
+                        {character.name} — {owner?.displayName || owner?.login || `игрок #${character.ownerId}`}
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] text-muted-foreground">
+                {charactersQuery.isLoading
+                  ? "Загрузка листов…"
+                  : charactersQuery.isError
+                    ? "Не удалось загрузить листы персонажей."
+                    : "При новой привязке владелец берётся из листа, а HP заполняется до максимума."}
+              </p>
+            </div>
+          ) : null}
+
+          {kind === "monster" ? (
+            <div className="space-y-1.5">
+              <Label className="text-xs">Карточка монстра</Label>
+              <Select value={compendiumId} onValueChange={selectMonster} disabled={pending}>
+                <SelectTrigger className="ui-hover h-8 w-full text-xs" aria-label="Карточка монстра">
+                  <SelectValue placeholder="Без привязки" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none" className="text-xs">Без привязки</SelectItem>
+                  {(monstersQuery.data?.items ?? []).map((monster) => (
+                    <SelectItem
+                      key={monster.id}
+                      value={String(monster.id)}
+                      className="text-xs"
+                    >
+                      {monster.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] text-muted-foreground">
+                {monstersQuery.isLoading
+                  ? "Загрузка монстров…"
+                  : monstersQuery.isError
+                    ? "Не удалось загрузить карточки монстров."
+                    : "При новой привязке HP заполняется до максимума; изображение берётся из карточки."}
+              </p>
+            </div>
+          ) : null}
 
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
@@ -293,9 +485,9 @@ export function TokenDialog({ state, board, onClose }: TokenDialogProps) {
             <Label className="text-xs">Изображение</Label>
             <div className="flex items-center gap-2.5">
               <div className="flex size-14 shrink-0 items-center justify-center overflow-hidden rounded-full border bg-muted">
-                {imageKey ? (
+                {displayImageKey ? (
                   <img
-                    src={boardImageUrl(imageKey)}
+                    src={boardImageUrl(displayImageKey)}
                     alt="Изображение токена"
                     className="size-full object-cover"
                   />
@@ -311,7 +503,7 @@ export function TokenDialog({ state, board, onClose }: TokenDialogProps) {
                   variant="outline"
                   size="sm"
                   className="ui-hover h-8 gap-1.5 text-xs"
-                  disabled={pending}
+                  disabled={pending || selectedMonsterId > 0}
                   onClick={() => fileInputRef.current?.click()}
                 >
                   <ImagePlus className="size-3.5" />
@@ -343,7 +535,9 @@ export function TokenDialog({ state, board, onClose }: TokenDialogProps) {
               />
             </div>
             <p className="text-[11px] text-muted-foreground">
-              PNG, JPEG или WebP до 15 МиБ.
+              {selectedMonsterId > 0
+                ? "Для привязанного монстра используется изображение его карточки."
+                : "PNG, JPEG или WebP до 15 МиБ."}
             </p>
           </div>
 

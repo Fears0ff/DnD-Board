@@ -295,8 +295,8 @@ test("фон поля: загрузка PNG, отрисовка, замена и
     await expectPixel(
       page,
       board,
-      board.gridWidth / 4,
-      board.gridHeight / 2,
+      board.gridWidth / 4 + 0.5,
+      board.gridHeight / 2 + 0.5,
       (px) => px[0] > 180 && px[1] < 90 && px[2] < 120,
     );
 
@@ -324,8 +324,8 @@ test("фон поля: загрузка PNG, отрисовка, замена и
     await expectPixel(
       page,
       board,
-      board.gridWidth / 4,
-      board.gridHeight / 2,
+      board.gridWidth / 4 + 0.5,
+      board.gridHeight / 2 + 0.5,
       (px) => px[2] > 180 && px[0] < 90,
     );
 

@@ -7,6 +7,7 @@ import { authRouter } from "../../api/routers/auth";
 import { compendiumRouter } from "../../api/routers/compendium";
 import { createContext } from "../../api/context";
 import { registerHub, type GameHub } from "../../api/realtime/hub";
+import { insertCompendiumItem } from "../../api/repositories/compendium";
 import {
   COMPENDIUM_IMPORT_MAX_BYTES,
   buildCompendiumJsonSchemas,
@@ -207,6 +208,70 @@ describe("compendium", () => {
     expect(
       (await playerCaller.compendium.get({ id: copy.card.id })).card.id,
     ).toBe(copy.card.id);
+  });
+
+  it("denies players any access to monster cards, master unaffected", async () => {
+    const master = await masterCaller();
+    const sharedMonster = await master.compendium.create({
+      ...createInput("monster", "Shared Skeleton"),
+      visibility: "shared",
+    });
+    const privateMonster = await master.compendium.create(
+      createInput("monster", "Secret Vampire"),
+    );
+    const sharedSpell = await master.compendium.create({
+      ...createInput("spell", "Shared Spell"),
+      visibility: "shared",
+    });
+
+    const player = await register("player");
+    const playerCaller = (await callerFor(player.cookie)).caller;
+
+    // Players cannot create cards, so seed a player-owned monster directly.
+    const ownMonster = insertCompendiumItem(testDb.db, {
+      type: "monster",
+      name: "Players Pet Wolf",
+      source: "",
+      isMagic: false,
+      visibility: "private",
+      createdBy: player.id,
+      imageKey: null,
+      data: JSON.stringify(validData.monster),
+    });
+
+    // list never returns monsters to a player — unfiltered, by type, by search.
+    expect((await playerCaller.compendium.list()).items.map((i) => i.name)).toEqual([
+      "Shared Spell",
+    ]);
+    expect((await playerCaller.compendium.list({ type: "monster" })).items).toEqual([]);
+    expect(
+      (await playerCaller.compendium.list({ type: "monster", search: "skeleton" })).items,
+    ).toEqual([]);
+    for (const search of ["skeleton", "vampire", "wolf"]) {
+      expect((await playerCaller.compendium.list({ search })).items).toEqual([]);
+    }
+
+    // get/copy on shared/private/own monsters answer NOT_FOUND (no leak).
+    for (const id of [sharedMonster.card.id, privateMonster.card.id, ownMonster.id]) {
+      await expectTrpcError(playerCaller.compendium.get({ id }), "NOT_FOUND");
+      await expectTrpcError(playerCaller.compendium.copy({ id }), "NOT_FOUND");
+    }
+    // Non-monster reads keep working for the player.
+    expect((await playerCaller.compendium.get({ id: sharedSpell.card.id })).card.name).toBe(
+      "Shared Spell",
+    );
+
+    // The master keeps full access to monsters of any visibility/owner.
+    expect((await master.compendium.list({ type: "monster" })).items.map((i) => i.name)).toEqual([
+      "Shared Skeleton",
+      "Secret Vampire",
+      "Players Pet Wolf",
+    ]);
+    expect((await master.compendium.get({ id: privateMonster.card.id })).card.name).toBe(
+      "Secret Vampire",
+    );
+    const masterCopy = await master.compendium.copy({ id: sharedMonster.card.id });
+    expect(masterCopy.card.type).toBe("monster");
   });
 
   it("filters by type and case-insensitive search substring", async () => {

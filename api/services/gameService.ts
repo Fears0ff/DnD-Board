@@ -1,6 +1,13 @@
 import { TRPCError } from "@trpc/server";
 import type { AppDatabase, DbHandle } from "../../db/connection";
 import type { BoardRow, TokenRow, UserRow } from "../../db/schema";
+import { monsterCardDataSchema } from "../../contracts/compendium";
+import { parseSheetJson } from "../repositories/characters";
+import {
+  findHeroTokenBinding,
+  findMonsterTokenBinding,
+  listMonsterTokenImages,
+} from "../repositories/tokenBindings";
 import type {
   BoardCreateInput,
   BoardDto,
@@ -52,6 +59,105 @@ interface MutationResult<T> {
   revision: number;
 }
 
+interface ResolvedTokenBinding {
+  characterId: number | null;
+  compendiumId: number | null;
+  ownerId?: number;
+  maxHp?: number;
+}
+
+/** Validate kind/reference pairing and read the one-time HP/owner defaults. */
+function resolveTokenBinding(
+  db: DbHandle,
+  kind: TokenDto["kind"],
+  characterId: number | null,
+  compendiumId: number | null,
+): ResolvedTokenBinding {
+  if (characterId !== null && compendiumId !== null) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "A token cannot reference both a character and a compendium card",
+    });
+  }
+  if (characterId !== null) {
+    if (kind !== "hero") {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Only a hero token can reference a character sheet",
+      });
+    }
+    const character = findHeroTokenBinding(db, characterId);
+    if (!character) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Character not found" });
+    }
+    return {
+      characterId,
+      compendiumId: null,
+      ownerId: character.ownerId,
+      maxHp: parseSheetJson(character.data).vitals.maxHp,
+    };
+  }
+  if (compendiumId !== null) {
+    if (kind !== "monster") {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Only a monster token can reference a monster card",
+      });
+    }
+    const monster = findMonsterTokenBinding(db, compendiumId);
+    if (!monster) {
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: "Monster compendium card not found",
+      });
+    }
+    let raw: unknown;
+    try {
+      raw = JSON.parse(monster.data);
+    } catch {
+      raw = null;
+    }
+    const parsed = monsterCardDataSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new TRPCError({
+        code: "INTERNAL_SERVER_ERROR",
+        message: "Stored monster card data failed validation",
+      });
+    }
+    return {
+      characterId: null,
+      compendiumId,
+      maxHp: parsed.data.hitPoints,
+    };
+  }
+  return { characterId: null, compendiumId: null };
+}
+
+/** Compendium-bound tokens use the card image; their own imageKey stays NULL. */
+function toResolvedTokenDtos(db: DbHandle, rows: TokenRow[]): TokenDto[] {
+  const ids = [
+    ...new Set(
+      rows
+        .map((row) => row.compendiumId)
+        .filter((id): id is number => id !== null),
+    ),
+  ];
+  const images = new Map(
+    listMonsterTokenImages(db, ids).map((row) => [row.id, row.imageKey]),
+  );
+  return rows.map((row) => {
+    const dto = toTokenDto(row);
+    if (row.compendiumId !== null) {
+      dto.imageKey = images.get(row.compendiumId) ?? null;
+    }
+    return dto;
+  });
+}
+
+function toResolvedTokenDto(db: DbHandle, row: TokenRow): TokenDto {
+  return toResolvedTokenDtos(db, [row])[0];
+}
+
 function requireBoard(db: DbHandle, id: number): BoardRow {
   const board = findBoardById(db, id);
   if (!board) {
@@ -91,24 +197,22 @@ export function getGameState(
   }
 
   const isMaster = user.gameRole === "master";
-  const toVisibleTokenDto = (row: TokenRow): TokenDto => {
-    const dto = toTokenDto(row);
+  const tokenRows = viewed ? listTokensByBoard(db, viewed.id) : [];
+  const tokenDtos = toResolvedTokenDtos(db, tokenRows).map((dto, index) => {
     // HP is private: the master sees everything, a player only their own tokens.
-    if (!isMaster && row.ownerId !== user.id) {
+    if (!isMaster && tokenRows[index].ownerId !== user.id) {
       dto.hp = null;
       dto.maxHp = null;
     }
     return dto;
-  };
-
-  const tokenRows = viewed ? listTokensByBoard(db, viewed.id) : [];
+  });
   return {
     me: toUserDto(user),
     revision: getGameRevision(db),
     boards: allBoards.map(toBoardDto),
     activeBoard: active ? toBoardDto(active) : null,
     viewedBoard: viewed ? toBoardDto(viewed) : null,
-    tokens: tokenRows.map(toVisibleTokenDto),
+    tokens: tokenDtos,
     initiative: viewed ? parseInitiative(viewed.initiative) : [],
   };
 }
@@ -272,10 +376,26 @@ export function addToken(
       input.boardId !== undefined
         ? requireBoard(t, input.boardId)
         : requireActiveBoard(t);
-    const ownerId = input.ownerId ?? null;
+    const binding = resolveTokenBinding(
+      t,
+      input.kind,
+      input.characterId ?? null,
+      input.compendiumId ?? null,
+    );
+    const ownerId = binding.ownerId ?? input.ownerId ?? null;
     assertValidOwner(t, ownerId);
-    const imageKey = input.imageKey ?? null;
+    if (binding.compendiumId !== null && input.imageKey != null) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "A compendium-bound token uses the card image",
+      });
+    }
+    const imageKey = binding.compendiumId !== null ? null : input.imageKey ?? null;
     assertMediaAssetExists(t, imageKey);
+    // Attaching an entity initializes full HP once. Later sheet/card edits do
+    // not synchronize token HP, and ordinary token HP edits remain manual.
+    const maxHp = binding.maxHp ?? input.maxHp;
+    const hp = binding.maxHp ?? input.hp;
     const row = insertToken(t, {
       boardId: board.id,
       kind: input.kind,
@@ -284,14 +404,14 @@ export function addToken(
       // New tokens appear at the center of the target board by default.
       cellX: input.cellX ?? Math.floor(board.gridWidth / 2),
       cellY: input.cellY ?? Math.floor(board.gridHeight / 2),
-      hp: input.hp,
-      maxHp: input.maxHp,
+      hp,
+      maxHp,
       size: input.size ?? 1,
-      characterId: null,
-      compendiumId: null,
+      characterId: binding.characterId,
+      compendiumId: binding.compendiumId,
       imageKey,
     });
-    return { value: toTokenDto(row), revision: bumpGameRevision(t) };
+    return { value: toResolvedTokenDto(t, row), revision: bumpGameRevision(t) };
   });
   publishGameChanged(result.revision);
   return result;
@@ -309,36 +429,74 @@ export async function updateToken(
     if (!token) {
       throw new TRPCError({ code: "NOT_FOUND", message: "Token not found" });
     }
-    const nextHp = input.hp ?? token.hp;
-    const nextMaxHp = input.maxHp ?? token.maxHp;
+    const nextKind = input.kind ?? token.kind;
+    const kindChanged = nextKind !== token.kind;
+    let nextCharacterId =
+      input.characterId !== undefined
+        ? input.characterId ?? null
+        : token.characterId;
+    let nextCompendiumId =
+      input.compendiumId !== undefined
+        ? input.compendiumId ?? null
+        : token.compendiumId;
+    // Changing the token kind drops an incompatible old reference unless the
+    // caller explicitly supplies a valid replacement in the same mutation.
+    if (kindChanged) {
+      if (input.characterId === undefined) nextCharacterId = null;
+      if (input.compendiumId === undefined) nextCompendiumId = null;
+    }
+    const binding = resolveTokenBinding(
+      t,
+      nextKind,
+      nextCharacterId,
+      nextCompendiumId,
+    );
+    const referenceChanged =
+      nextCharacterId !== token.characterId ||
+      nextCompendiumId !== token.compendiumId;
+    const attachMaxHp = referenceChanged ? binding.maxHp : undefined;
+    const nextMaxHp = attachMaxHp ?? input.maxHp ?? token.maxHp;
+    const nextHp = attachMaxHp ?? input.hp ?? token.hp;
     if (nextHp < 0 || nextMaxHp < 0 || nextHp > nextMaxHp) {
       throw new TRPCError({
         code: "BAD_REQUEST",
         message: "hp must satisfy 0 <= hp <= maxHp",
       });
     }
-    if (input.ownerId !== undefined) {
-      assertValidOwner(t, input.ownerId);
+    const nextOwnerId =
+      binding.ownerId ??
+      (input.ownerId !== undefined ? input.ownerId ?? null : token.ownerId);
+    assertValidOwner(t, nextOwnerId);
+
+    let nextImageKey =
+      input.imageKey !== undefined ? input.imageKey ?? null : token.imageKey;
+    if (nextCompendiumId !== null && nextImageKey !== null) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "A compendium-bound token uses the card image",
+      });
     }
-    if (input.imageKey !== undefined) {
-      assertMediaAssetExists(t, input.imageKey);
-      if (input.imageKey !== token.imageKey) replacedKey = token.imageKey;
-    }
+    if (nextCompendiumId !== null) nextImageKey = null;
+    assertMediaAssetExists(t, nextImageKey);
+    if (nextImageKey !== token.imageKey) replacedKey = token.imageKey;
+
     const row = updateTokenRow(t, input.id, {
       ...(input.label !== undefined ? { label: input.label } : {}),
-      ...(input.kind !== undefined ? { kind: input.kind } : {}),
-      ...(input.ownerId !== undefined ? { ownerId: input.ownerId } : {}),
-      ...(input.hp !== undefined ? { hp: input.hp } : {}),
-      ...(input.maxHp !== undefined ? { maxHp: input.maxHp } : {}),
+      kind: nextKind,
+      ownerId: nextOwnerId,
+      characterId: nextCharacterId,
+      compendiumId: nextCompendiumId,
+      hp: nextHp,
+      maxHp: nextMaxHp,
       ...(input.size !== undefined ? { size: input.size } : {}),
       ...(input.cellX !== undefined ? { cellX: input.cellX } : {}),
       ...(input.cellY !== undefined ? { cellY: input.cellY } : {}),
-      ...(input.imageKey !== undefined ? { imageKey: input.imageKey } : {}),
+      imageKey: nextImageKey,
     });
     if (!row) {
       throw new TRPCError({ code: "NOT_FOUND", message: "Token not found" });
     }
-    return { value: toTokenDto(row), revision: bumpGameRevision(t) };
+    return { value: toResolvedTokenDto(t, row), revision: bumpGameRevision(t) };
   });
   publishGameChanged(result.revision);
   await cleanupReplacedAssets(db, [replacedKey]);
@@ -391,7 +549,7 @@ export function moveToken(
     if (!row) {
       throw new TRPCError({ code: "NOT_FOUND", message: "Token not found" });
     }
-    return { value: toTokenDto(row), revision: bumpGameRevision(t) };
+    return { value: toResolvedTokenDto(t, row), revision: bumpGameRevision(t) };
   });
   publishGameChanged(result.revision);
   return result;
@@ -417,7 +575,7 @@ export function adjustTokenHp(
     if (!row) {
       throw new TRPCError({ code: "NOT_FOUND", message: "Token not found" });
     }
-    return { value: toTokenDto(row), revision: bumpGameRevision(t) };
+    return { value: toResolvedTokenDto(t, row), revision: bumpGameRevision(t) };
   });
   publishGameChanged(result.revision);
   return result;

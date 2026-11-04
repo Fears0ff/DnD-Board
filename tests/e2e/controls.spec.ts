@@ -24,6 +24,8 @@ interface TokenDto {
   boardId: number;
   label: string;
   ownerId: number | null;
+  characterId: number | null;
+  compendiumId: number | null;
   cellX: number;
   cellY: number;
   hp: number | null;
@@ -597,5 +599,131 @@ test("приватность HP: владелец видит свои HP, чуж
       owner.context.close(),
       stranger.context.close(),
     ]);
+  }
+});
+
+
+test("привязка героя и монстра: владелец, полные HP и заметная сетка", async ({
+  browser,
+}) => {
+  test.setTimeout(120_000);
+  const master = await masterPage(browser);
+  const player = await playerPage(browser, "binding_player", "Игрок привязки");
+  try {
+    const sheet = await trpcMutation<{
+      id: number;
+      ownerId: number;
+      name: string;
+    }>(player.page.request, "characters.create", {
+      name: "Привязанный герой",
+      data: { vitals: { maxHp: 34, currentHp: 34 } },
+    });
+    const monster = await trpcMutation<{
+      card: { id: number; name: string };
+    }>(master.page.request, "compendium.create", {
+      type: "monster",
+      name: "Привязанный монстр",
+      visibility: "private",
+      data: {
+        size: "large",
+        creatureType: "beast",
+        armorClass: 14,
+        hitPoints: 52,
+        abilities: { str: 16, dex: 10, con: 14, int: 8, wis: 12, cha: 8 },
+      },
+    });
+    const board = await trpcMutation<BoardDto>(master.page.request, "boards.create", {
+      name: "Поле привязок",
+      gridWidth: 12,
+      gridHeight: 8,
+    });
+    await trpcMutation(master.page.request, "boards.setActive", { id: board.id });
+    await master.page.goto("/");
+    await expect(master.page.getByTestId("board-canvas")).toBeVisible();
+
+    await master.page.getByRole("button", { name: "Токен", exact: true }).click();
+    let dialog = master.page.getByRole("dialog");
+    await dialog.getByLabel("Лист героя").click();
+    await master.page.getByRole("option", { name: /Привязанный герой/ }).click();
+    await expect(dialog.locator("#token-label")).toHaveValue("Привязанный герой");
+    await expect(dialog.locator("#token-hp")).toHaveValue("34");
+    await expect(dialog.locator("#token-maxhp")).toHaveValue("34");
+    await expect(dialog.getByLabel("Владелец токена")).toBeDisabled();
+    await dialog.getByRole("button", { name: "Создать", exact: true }).click();
+    await expect(dialog).toBeHidden();
+
+    await master.page.getByRole("button", { name: "Токен", exact: true }).click();
+    dialog = master.page.getByRole("dialog");
+    await dialog.getByLabel("Тип токена").click();
+    await master.page.getByRole("option", { name: "Монстр", exact: true }).click();
+    await dialog.getByLabel("Карточка монстра").click();
+    await master.page.getByRole("option", { name: "Привязанный монстр" }).click();
+    await expect(dialog.locator("#token-label")).toHaveValue("Привязанный монстр");
+    await expect(dialog.locator("#token-hp")).toHaveValue("52");
+    await expect(dialog.locator("#token-maxhp")).toHaveValue("52");
+    await dialog.getByRole("button", { name: "Создать", exact: true }).click();
+    await expect(dialog).toBeHidden();
+
+    await expect
+      .poll(async () => {
+        const state = await trpcQuery<GameStateDto>(master.page.request, "game.state", {
+          boardId: board.id,
+        });
+        return state.tokens.filter(
+          (token) => token.characterId === sheet.id || token.compendiumId === monster.card.id,
+        );
+      })
+      .toEqual([
+        expect.objectContaining({
+          label: "Привязанный герой",
+          ownerId: sheet.ownerId,
+          characterId: sheet.id,
+          hp: 34,
+          maxHp: 34,
+        }),
+        expect.objectContaining({
+          label: "Привязанный монстр",
+          compendiumId: monster.card.id,
+          hp: 52,
+          maxHp: 52,
+        }),
+      ]);
+
+    // Центр светлой линии должен быть виден независимо от текстуры под ним.
+    await expect
+      .poll(async () => {
+        const canvas = master.page.getByTestId("board-canvas");
+        return canvas.evaluate((element) => {
+          const canvasElement = element as HTMLCanvasElement;
+          const context = canvasElement.getContext("2d");
+          if (!context) return false;
+          const dpr = window.devicePixelRatio || 1;
+          const width = canvasElement.width / dpr;
+          const height = canvasElement.height / dpr;
+          const scale = Math.max(
+            0.25,
+            Math.min(4, (width - 96) / (12 * 64), (height - 96) / (8 * 64)),
+          );
+          const offsetX = (width - 12 * 64 * scale) / 2;
+          const offsetY = (height - 8 * 64 * scale) / 2;
+          const x = Math.round((offsetX + 64 * scale) * dpr);
+          const y = Math.round((offsetY + 2.5 * 64 * scale) * dpr);
+          const pixels = context.getImageData(x - 2, y - 2, 5, 5).data;
+          for (let index = 0; index < pixels.length; index += 4) {
+            if (
+              pixels[index] > 160 &&
+              pixels[index + 1] > 170 &&
+              pixels[index + 2] > 150 &&
+              pixels[index + 3] > 240
+            ) {
+              return true;
+            }
+          }
+          return false;
+        });
+      })
+      .toBe(true);
+  } finally {
+    await Promise.all([master.context.close(), player.context.close()]);
   }
 });

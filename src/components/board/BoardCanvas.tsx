@@ -286,10 +286,9 @@ export function BoardCanvas(props: BoardCanvasProps) {
         if (bg.status === "ready") drawCover(ctx, bg.img, 0, 0, boardW, boardH);
       }
 
-      // сетка поверх фона
+      // Двухслойная сетка остаётся заметной на тёмной текстуре и на любом
+      // загруженном фоне: тёмный контур отделяет светлую линию от карты.
       if (p.showGrid && cell * view.scale >= 6) {
-        ctx.strokeStyle = "rgba(195,216,189,0.09)";
-        ctx.lineWidth = 1 / view.scale;
         ctx.beginPath();
         for (let x = 0; x <= p.board.gridWidth; x += 1) {
           ctx.moveTo(x * cell, 0);
@@ -299,6 +298,11 @@ export function BoardCanvas(props: BoardCanvasProps) {
           ctx.moveTo(0, y * cell);
           ctx.lineTo(boardW, y * cell);
         }
+        ctx.strokeStyle = "rgba(0,0,0,0.78)";
+        ctx.lineWidth = 3 / view.scale;
+        ctx.stroke();
+        ctx.strokeStyle = "rgba(235,245,228,0.82)";
+        ctx.lineWidth = 1.25 / view.scale;
         ctx.stroke();
       }
       ctx.restore();

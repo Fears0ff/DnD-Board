@@ -313,6 +313,187 @@ describe("tokens", () => {
   });
 });
 
+describe("token entity bindings", () => {
+  const abilities = { str: 10, dex: 12, con: 14, int: 16, wis: 13, cha: 8 };
+
+  async function playerSheet(name = "Player hero", maxHp = 37) {
+    const pc = await playerCaller();
+    return pc.characters.create({
+      name,
+      data: { vitals: { maxHp, currentHp: maxHp } },
+    });
+  }
+
+  async function monsterCard(name = "Bound goblin", hitPoints = 45) {
+    const dm = await masterCaller();
+    return dm.compendium.create({
+      type: "monster",
+      name,
+      visibility: "private",
+      data: {
+        size: "medium",
+        creatureType: "humanoid",
+        armorClass: 13,
+        hitPoints,
+        abilities,
+      },
+    });
+  }
+
+  it("attaches a hero sheet, inherits its owner and initializes full HP once", async () => {
+    await createBoard();
+    const sheet = await playerSheet();
+    const dm = await masterCaller();
+    const { token } = await dm.tokens.add({
+      kind: "hero",
+      label: "Hero",
+      characterId: sheet.id,
+      ownerId: master.id,
+      hp: 1,
+      maxHp: 1,
+    });
+    expect(token).toMatchObject({
+      characterId: sheet.id,
+      compendiumId: null,
+      ownerId: player.id,
+      hp: 37,
+      maxHp: 37,
+    });
+
+    // Saving the same binding and changing HP manually must not refill it.
+    const manual = await dm.tokens.update({
+      id: token.id,
+      characterId: sheet.id,
+      hp: 12,
+      maxHp: 37,
+    });
+    expect(manual.token).toMatchObject({ hp: 12, maxHp: 37, ownerId: player.id });
+
+    // The sheet is not an ongoing HP synchronization source.
+    const pc = await playerCaller();
+    const fresh = await pc.characters.get({ id: sheet.id });
+    await pc.characters.update({
+      id: sheet.id,
+      expectedVersion: fresh.version,
+      data: { vitals: { maxHp: 99, currentHp: 99 } },
+    });
+    const state = await dm.game.state();
+    expect(state.tokens[0]).toMatchObject({ hp: 12, maxHp: 37 });
+  });
+
+  it("attaches a monster card, resolves its image and resets HP only on reattach", async () => {
+    await createBoard();
+    const card = await monsterCard();
+    const dm = await masterCaller();
+    const { token } = await dm.tokens.add({
+      kind: "monster",
+      label: "Goblin",
+      compendiumId: card.card.id,
+      hp: 2,
+      maxHp: 3,
+    });
+    expect(token).toMatchObject({
+      compendiumId: card.card.id,
+      characterId: null,
+      hp: 45,
+      maxHp: 45,
+      imageKey: null,
+    });
+
+    const manual = await dm.tokens.update({ id: token.id, hp: 9 });
+    expect(manual.token.hp).toBe(9);
+    const detached = await dm.tokens.update({ id: token.id, compendiumId: null });
+    expect(detached.token).toMatchObject({ compendiumId: null, hp: 9, maxHp: 45 });
+    const reattached = await dm.tokens.update({
+      id: token.id,
+      compendiumId: card.card.id,
+    });
+    expect(reattached.token).toMatchObject({ hp: 45, maxHp: 45 });
+
+    const asProp = await dm.tokens.update({ id: token.id, kind: "prop" });
+    expect(asProp.token).toMatchObject({
+      kind: "prop",
+      characterId: null,
+      compendiumId: null,
+      hp: 45,
+      maxHp: 45,
+    });
+  });
+
+  it("inherits a replacement sheet owner and keeps owner/HP when detached", async () => {
+    await createBoard();
+    const first = await playerSheet("First", 20);
+    const dm = await masterCaller();
+    const second = await dm.characters.create({
+      name: "Master NPC",
+      data: { vitals: { maxHp: 60 } },
+    });
+    const { token } = await dm.tokens.add({
+      kind: "hero",
+      label: "Hero",
+      characterId: first.id,
+      hp: 0,
+      maxHp: 0,
+    });
+    const replaced = await dm.tokens.update({
+      id: token.id,
+      characterId: second.id,
+      ownerId: player.id,
+    });
+    expect(replaced.token).toMatchObject({
+      characterId: second.id,
+      ownerId: master.id,
+      hp: 60,
+      maxHp: 60,
+    });
+    const detached = await dm.tokens.update({ id: token.id, characterId: null });
+    expect(detached.token).toMatchObject({
+      characterId: null,
+      ownerId: master.id,
+      hp: 60,
+      maxHp: 60,
+    });
+  });
+
+  it("rejects mismatched, duplicate and missing references", async () => {
+    await createBoard();
+    const sheet = await playerSheet();
+    const monster = await monsterCard();
+    const dm = await masterCaller();
+    const item = await dm.compendium.create({
+      type: "item",
+      name: "Not a monster",
+      data: {},
+    });
+    const base = { label: "Invalid", hp: 1, maxHp: 1 };
+    await expectTrpcError(
+      dm.tokens.add({ ...base, kind: "monster", characterId: sheet.id }),
+      "BAD_REQUEST",
+    );
+    await expectTrpcError(
+      dm.tokens.add({ ...base, kind: "hero", compendiumId: monster.card.id }),
+      "BAD_REQUEST",
+    );
+    await expectTrpcError(
+      dm.tokens.add({
+        ...base,
+        kind: "hero",
+        characterId: sheet.id,
+        compendiumId: monster.card.id,
+      }),
+      "BAD_REQUEST",
+    );
+    await expectTrpcError(
+      dm.tokens.add({ ...base, kind: "hero", characterId: 999999 }),
+      "NOT_FOUND",
+    );
+    await expectTrpcError(
+      dm.tokens.add({ ...base, kind: "monster", compendiumId: item.card.id }),
+      "NOT_FOUND",
+    );
+  });
+});
+
 describe("initiative", () => {
   it("is master-only and bound to the active board", async () => {
     await createBoard();

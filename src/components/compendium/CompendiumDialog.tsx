@@ -48,7 +48,8 @@ function useDebouncedValue<T>(value: T, delayMs = 300): T {
 /**
  * Главный диалог компедиума: единый список compendium.list для браузера
  * (пикеры используют CompendiumCardPicker). Мастер управляет карточками и
- * импортом; игрок видит общие и свои приватные карточки и может копировать.
+ * импортом; игрок видит общие и свои приватные карточки (кроме монстров —
+ * они только для мастера) и может копировать.
  *
  * Пока диалог открыт, список опрашивается каждые 4 секунды — это покрывает
  * fallback без WS; при живом WS useGameSync дополнительно инвалидирует список
@@ -160,7 +161,7 @@ function CompendiumDialogBody({ me }: { me: UserDto }) {
             <DialogDescription className="text-xs">
               {isMaster
                 ? "Все карточки. Мастер создаёт, редактирует, копирует, удаляет и импортирует."
-                : "Общие карточки и ваши приватные. Любую видимую карточку можно скопировать себе."}
+                : "Общие карточки и ваши приватные, кроме монстров — они доступны только мастеру. Любую видимую карточку можно скопировать себе."}
             </DialogDescription>
           </DialogHeader>
 
@@ -185,11 +186,13 @@ function CompendiumDialogBody({ me }: { me: UserDto }) {
                 <SelectItem value="all" className="text-xs">
                   Все типы
                 </SelectItem>
-                {compendiumTypes.map((t) => (
-                  <SelectItem key={t} value={t} className="text-xs">
-                    {COMPENDIUM_TYPE_LABELS[t]}
-                  </SelectItem>
-                ))}
+                {compendiumTypes
+                  .filter((t) => isMaster || t !== "monster")
+                  .map((t) => (
+                    <SelectItem key={t} value={t} className="text-xs">
+                      {COMPENDIUM_TYPE_LABELS[t]}
+                    </SelectItem>
+                  ))}
               </SelectContent>
             </Select>
             <Input

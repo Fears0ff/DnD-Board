@@ -40,8 +40,9 @@ import { deleteAssetIfUnreferenced } from "./mediaService";
  *
  * Rights (plan §4.3, compendium slice): reads and copies are role-aware
  * (master sees everything; a player sees shared cards plus their own
- * private ones); create/update/remove/import are master-only (enforced by
- * masterProcedure in api/routers/compendium.ts).
+ * private ones, but never monsters — they answer NOT_FOUND without
+ * revealing existence); create/update/remove/import are master-only
+ * (enforced by masterProcedure in api/routers/compendium.ts).
  */
 
 export class CompendiumImportError extends TRPCError {
@@ -74,11 +75,11 @@ function notFound(): TRPCError {
 
 /** A card is readable when it is shared or owned by the requester. */
 function canRead(row: CompendiumItemRow, user: UserRow): boolean {
-  return (
-    user.gameRole === "master" ||
-    row.visibility === "shared" ||
-    row.createdBy === user.id
-  );
+  if (user.gameRole === "master") return true;
+  // Monsters are master-only: players get NOT_FOUND on shared/private/own
+  // monsters alike, so the card's existence never leaks.
+  if (row.type === "monster") return false;
+  return row.visibility === "shared" || row.createdBy === user.id;
 }
 
 function requireVisibleCard(db: DbHandle, id: number, user: UserRow): CompendiumItemRow {

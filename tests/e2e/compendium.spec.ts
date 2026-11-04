@@ -184,6 +184,14 @@ test("импорт показывает индекс ошибки, атомар�
     const playerDialog = await openCompendium(playerPage);
     await expect(playerDialog.getByRole("button", { name: "Создать", exact: true })).toHaveCount(0);
     await expect(playerDialog.getByRole("button", { name: "Импорт", exact: true })).toHaveCount(0);
+    // У игрока в фильтре типов нет монстров, описание это уточняет.
+    await expect(
+      playerDialog.getByText(/кроме монстров — они доступны только мастеру/),
+    ).toBeVisible();
+    await playerDialog.getByRole("combobox").click();
+    await expect(playerPage.getByRole("option", { name: "Заклинание" })).toBeVisible();
+    await expect(playerPage.getByRole("option", { name: "Монстр" })).toHaveCount(0);
+    await playerPage.keyboard.press("Escape");
     await playerDialog.getByPlaceholder("Поиск по названию…").fill("Импортированный фонарь");
     await playerDialog.getByRole("button", { name: /Импортированный фонарь/ }).click();
     await playerDialog.getByRole("button", { name: "Копировать", exact: true }).click();

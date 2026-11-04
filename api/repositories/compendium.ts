@@ -1,4 +1,4 @@
-import { and, asc, eq, or, type SQL } from "drizzle-orm";
+import { and, asc, eq, ne, or, type SQL } from "drizzle-orm";
 import type { DbHandle } from "../../db/connection";
 import {
   compendiumItems,
@@ -48,7 +48,8 @@ export interface CompendiumListFilter {
 /**
  * Rows visible to the given user, filtered by type/search (case-insensitive
  * substring over the name). Visibility: the master sees everything; a player
- * sees shared cards plus their own private ones.
+ * sees shared cards plus their own private ones, but NEVER monsters — the
+ * type=monster filter and search cannot smuggle them out either.
  */
 export function listCompendiumItems(
   db: Db,
@@ -62,6 +63,7 @@ export function listCompendiumItems(
       eq(compendiumItems.createdBy, user.id),
     );
     if (visible) conditions.push(visible);
+    conditions.push(ne(compendiumItems.type, "monster"));
   }
   if (filter.type !== undefined) {
     conditions.push(eq(compendiumItems.type, filter.type));

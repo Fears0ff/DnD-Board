@@ -54,6 +54,11 @@ export const tokenAddInputSchema = z
     kind: tokenKindSchema,
     label: z.string().trim().max(120).default(""),
     ownerId: idSchema.nullish(),
+    // Hero -> player-owned character sheet; monster -> compendium monster.
+    // The service validates the kind/reference combination and initializes HP
+    // once when a new reference is attached.
+    characterId: idSchema.nullish(),
+    compendiumId: idSchema.nullish(),
     hp: hpSchema,
     maxHp: hpSchema,
     size: tokenSizeSchema.optional(),
@@ -65,18 +70,24 @@ export const tokenAddInputSchema = z
     // media.uploadImage). FK + existence enforced server-side.
     imageKey: mediaKeySchema.nullish(),
   })
-  .refine((v) => v.hp <= v.maxHp, {
-    message: "hp must be <= maxHp",
-    path: ["hp"],
-  });
+  .refine(
+    (v) =>
+      v.characterId != null || v.compendiumId != null || v.hp <= v.maxHp,
+    {
+      message: "hp must be <= maxHp",
+      path: ["hp"],
+    },
+  );
 export type TokenAddInput = z.infer<typeof tokenAddInputSchema>;
 
 export const tokenUpdateInputSchema = z.object({
   id: idSchema,
   label: z.string().trim().max(120).optional(),
   kind: tokenKindSchema.optional(),
-  // null clears the owner; undefined leaves it unchanged.
+  // null clears the owner/reference; undefined leaves it unchanged.
   ownerId: idSchema.nullish(),
+  characterId: idSchema.nullish(),
+  compendiumId: idSchema.nullish(),
   hp: hpSchema.optional(),
   maxHp: hpSchema.optional(),
   size: tokenSizeSchema.optional(),
@@ -116,6 +127,8 @@ export interface TokenDto {
   kind: (typeof tokenKinds)[number];
   label: string;
   ownerId: number | null;
+  characterId: number | null;
+  compendiumId: number | null;
   cellX: number;
   cellY: number;
   /** Hidden (null) for viewers who may not see this token's HP. */
