@@ -1,22 +1,21 @@
 const fs = require("node:fs");
 const path = require("node:path");
-const util = require("node:util");
 
 function capturePackagingOutput() {
   const output = [];
-  const methods = ["log", "warn", "error"];
-  const original = Object.fromEntries(methods.map((name) => [name, console[name]]));
-  for (const name of methods) {
-    console[name] = (...args) => {
-      original[name](...args);
-      output.push(util.format(...args));
+  const stderr = process.stderr.write.bind(process.stderr);
+  for (const stream of [process.stdout, process.stderr]) {
+    const write = stream.write.bind(stream);
+    stream.write = (chunk, encoding, callback) => {
+      output.push(String(chunk));
+      return write(chunk, encoding, callback);
     };
   }
-  process.once("exit", (code) => {
-    if (code === 0) return;
-    const details = output.join("\n").trim().slice(-24000) ||
-      `electron-builder exited with code ${code}.`;
-    original.error(`::error title=Windows installer packaging::${annotationText(details)}`);
+  process.once("exit", () => {
+    const details = output.join("").trim().slice(-24000);
+    if (details) {
+      stderr(`::notice title=Windows installer output::${annotationText(details)}\n`);
+    }
   });
 }
 
