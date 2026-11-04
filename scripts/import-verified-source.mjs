@@ -50,7 +50,21 @@ try {
   execFileSync("git", ["commit", "-m", "Add media, compendium, character sheets and desktop runtime"], { cwd: root, stdio: "inherit" });
 
   stage = "source push";
-  execFileSync("git", ["push", "origin", "HEAD:main"], { cwd: root, stdio: "inherit" });
+  try {
+    execFileSync("git", ["push", "origin", "HEAD:main"], { cwd: root, encoding: "utf8", stdio: "pipe" });
+  } catch (error) {
+    const stderr = error && typeof error === "object" && "stderr" in error && typeof error.stderr === "string"
+      ? error.stderr
+      : "";
+    const detail = stderr
+      .replace(/https:\/\/[^\s/@]+@/g, "https://")
+      .replace(/(authorization|password|token)[=:][^\s]+/gi, "$1=[redacted]")
+      .trim()
+      .split("\n")
+      .slice(-8)
+      .join(" | ");
+    throw new Error(detail || (error instanceof Error ? error.message : String(error)));
+  }
 } catch (error) {
   const detail = (error instanceof Error ? error.message : String(error)).split("\n")[0];
   console.error(`::error::Verified source import failed during ${stage}: ${detail}`);
