@@ -28,9 +28,9 @@ export interface BoardCanvasProps {
 }
 
 const TOKEN_COLORS: Record<TokenKind, { fill: string; ring: string; text: string }> = {
-  hero: { fill: "#ffca34", ring: "#ffe08a", text: "#191715" },
-  monster: { fill: "#b04a3a", ring: "#d97a66", text: "#f4ecd8" },
-  prop: { fill: "#7d8c5c", ring: "#a5b583", text: "#191715" },
+  hero: { fill: "#8fb996", ring: "#c3d8bd", text: "#122018" },
+  monster: { fill: "#a95345", ring: "#d58a78", text: "#f4f0e8" },
+  prop: { fill: "#627d5b", ring: "#9ab18c", text: "#eef4ec" },
 };
 
 function mulberry32(seed: number): () => number {
@@ -44,7 +44,7 @@ function mulberry32(seed: number): () => number {
 }
 
 /**
- * Процедурный фон-заглушка поля: тёмная «пергаментная» текстура с шумом
+ * Процедурный фон-заглушка поля: тёмная лесная текстура с шумом
  * и пятнами. Генерируется один раз на поле в offscreen-тайл 256×256.
  */
 function createBackgroundTile(seed: number): HTMLCanvasElement {
@@ -56,7 +56,7 @@ function createBackgroundTile(seed: number): HTMLCanvasElement {
   const rand = mulberry32(seed * 2654435761 + 97);
   if (!ctx) return tile;
 
-  ctx.fillStyle = "#2a2520";
+  ctx.fillStyle = "#1c2a22";
   ctx.fillRect(0, 0, size, size);
 
   // крупные пятна потемнения/посветления
@@ -67,7 +67,7 @@ function createBackgroundTile(seed: number): HTMLCanvasElement {
     const lighten = rand() > 0.5;
     const alpha = 0.03 + rand() * 0.05;
     const g = ctx.createRadialGradient(x, y, 0, x, y, r);
-    g.addColorStop(0, lighten ? `rgba(244,236,216,${alpha})` : `rgba(0,0,0,${alpha})`);
+    g.addColorStop(0, lighten ? `rgba(195,216,189,${alpha})` : `rgba(0,0,0,${alpha})`);
     g.addColorStop(1, "rgba(0,0,0,0)");
     ctx.fillStyle = g;
     ctx.fillRect(x - r, y - r, r * 2, r * 2);
@@ -85,7 +85,7 @@ function createBackgroundTile(seed: number): HTMLCanvasElement {
   ctx.putImageData(image, 0, 0);
 
   // редкие царапины
-  ctx.strokeStyle = "rgba(244,236,216,0.04)";
+  ctx.strokeStyle = "rgba(195,216,189,0.04)";
   ctx.lineWidth = 1;
   for (let i = 0; i < 10; i += 1) {
     const x = rand() * size;
@@ -165,7 +165,9 @@ export function BoardCanvas(props: BoardCanvasProps) {
       canvas.width = Math.max(1, Math.round(w * dpr));
       canvas.height = Math.max(1, Math.round(h * dpr));
       canvas.style.width = `${w}px`;
-      canvas.style.height = `${h}px`;
+      // Панель инициативы и изменение окна меняют доступную ширину canvas.
+      // Пересобираем fit, чтобы поле не обрезалось после resize.
+      viewRef.current = fitView(propsRef.current.board, w, h);
       markDirty();
     };
     resize();
@@ -194,7 +196,7 @@ export function BoardCanvas(props: BoardCanvasProps) {
 
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       // подложка всего экрана
-      ctx.fillStyle = "#191715";
+      ctx.fillStyle = "#101a15";
       ctx.fillRect(0, 0, vw, vh);
 
       ctx.save();
@@ -214,13 +216,13 @@ export function BoardCanvas(props: BoardCanvasProps) {
         ctx.fillStyle = pattern;
         ctx.fillRect(0, 0, boardW, boardH);
       } else {
-        ctx.fillStyle = "#2a2520";
+        ctx.fillStyle = "#1c2a22";
         ctx.fillRect(0, 0, boardW, boardH);
       }
 
       // сетка поверх фона
       if (p.showGrid && cell * view.scale >= 6) {
-        ctx.strokeStyle = "rgba(244,236,216,0.09)";
+        ctx.strokeStyle = "rgba(195,216,189,0.09)";
         ctx.lineWidth = 1 / view.scale;
         ctx.beginPath();
         for (let x = 0; x <= p.board.gridWidth; x += 1) {
@@ -236,15 +238,15 @@ export function BoardCanvas(props: BoardCanvasProps) {
       ctx.restore();
 
       // рамка поля
-      ctx.strokeStyle = "rgba(244,236,216,0.22)";
+      ctx.strokeStyle = "rgba(195,216,189,0.22)";
       ctx.lineWidth = 1.5 / view.scale;
       ctx.strokeRect(0, 0, boardW, boardH);
 
       // подсветка целевой клетки при drag
       const drag = dragRef.current;
       if (drag) {
-        ctx.fillStyle = "rgba(255,202,52,0.16)";
-        ctx.strokeStyle = "rgba(255,202,52,0.65)";
+        ctx.fillStyle = "rgba(143,185,150,0.18)";
+        ctx.strokeStyle = "rgba(195,216,189,0.72)";
         ctx.lineWidth = 1.5 / view.scale;
         const dt = p.tokens.find((t) => t.id === drag.tokenId);
         const size = dt ? dt.size : 1;
@@ -279,7 +281,7 @@ export function BoardCanvas(props: BoardCanvasProps) {
         ctx.fill();
         ctx.globalAlpha = 1;
         ctx.lineWidth = selected ? 3 / view.scale : 1.5 / view.scale;
-        ctx.strokeStyle = selected ? "#f4ecd8" : colors.ring;
+        ctx.strokeStyle = selected ? "#d7e6d2" : colors.ring;
         ctx.stroke();
 
         // инициалы
@@ -291,7 +293,7 @@ export function BoardCanvas(props: BoardCanvasProps) {
         ctx.fillText(initials(t.label), cx, cy);
 
         // HP-бар над токеном
-        if (t.maxHp > 0) {
+        if (t.hp !== null && t.maxHp !== null && t.maxHp > 0) {
           const pct = Math.max(0, Math.min(1, t.hp / t.maxHp));
           const barW = r * 1.7;
           const barH = Math.max(3, 4 / view.scale);
@@ -301,14 +303,14 @@ export function BoardCanvas(props: BoardCanvasProps) {
           ctx.fillRect(bx, by, barW, barH);
           ctx.fillStyle = pct > 0.5 ? "#7da05c" : pct > 0.25 ? "#c99a3a" : "#b04a3a";
           ctx.fillRect(bx, by, barW * pct, barH);
-          ctx.strokeStyle = "rgba(244,236,216,0.3)";
+          ctx.strokeStyle = "rgba(195,216,189,0.3)";
           ctx.lineWidth = 1 / view.scale;
           ctx.strokeRect(bx, by, barW, barH);
         }
 
         // подпись под токеном
         ctx.font = `${fontLabel}px system-ui, sans-serif`;
-        const label = t.maxHp > 0 ? `${t.label} · ${t.hp}/${t.maxHp}` : t.label;
+        const label = t.hp !== null && t.maxHp !== null && t.maxHp > 0 ? `${t.label} · ${t.hp}/${t.maxHp}` : t.label;
         const ty = cy + r + fontLabel * 0.75;
         const metrics = ctx.measureText(label);
         const pad = 3 / view.scale;
@@ -319,12 +321,12 @@ export function BoardCanvas(props: BoardCanvasProps) {
           metrics.width + pad * 2,
           fontLabel * 1.24,
         );
-        ctx.fillStyle = selected ? "#ffca34" : "#f4ecd8";
+        ctx.fillStyle = selected ? "#a9d3ae" : "#e2ecdd";
         ctx.fillText(label, cx, ty);
 
         if (pending) {
           ctx.font = `${fontHp}px system-ui, sans-serif`;
-          ctx.fillStyle = "rgba(255,202,52,0.9)";
+          ctx.fillStyle = "rgba(143,185,150,0.9)";
           ctx.fillText("…", cx, cy - r - Math.max(10, 12 / view.scale));
         }
       }

@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { queryClient } from "@/providers/trpc";
-import { api, invalidateAuth, invalidateGameState, trpcErrorMessage } from "@/lib/api";
+import { api, invalidateGameState, trpcErrorMessage } from "@/lib/api";
 import type { BoardDto, UserDto } from "@/lib/game-contract";
 import type { RealtimeStatus } from "@/lib/realtime";
 import { Button } from "@/components/ui/button";
@@ -128,7 +128,15 @@ function BoardFormDialog({
   );
 }
 
-function BoardsMenu({ boards, activeBoard }: { boards: BoardDto[]; activeBoard: BoardDto | null }) {
+function BoardsMenu({
+  boards,
+  viewedBoard,
+  onViewBoard,
+}: {
+  boards: BoardDto[];
+  viewedBoard: BoardDto | null;
+  onViewBoard: (id?: number) => void;
+}) {
   const [createOpen, setCreateOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
   const [removeOpen, setRemoveOpen] = useState(false);
@@ -148,7 +156,7 @@ function BoardsMenu({ boards, activeBoard }: { boards: BoardDto[]; activeBoard: 
         <DropdownMenuTrigger asChild>
           <Button variant="outline" size="sm" className="ui-hover h-8 max-w-56 gap-1.5 text-xs">
             <MapIcon className="size-3.5 shrink-0 text-primary" />
-            <span className="truncate">{activeBoard ? activeBoard.name : "Нет поля"}</span>
+            <span className="truncate">{viewedBoard ? viewedBoard.name : "Нет поля"}</span>
             <ChevronDown className="size-3.5 shrink-0 opacity-60" />
           </Button>
         </DropdownMenuTrigger>
@@ -158,34 +166,51 @@ function BoardsMenu({ boards, activeBoard }: { boards: BoardDto[]; activeBoard: 
               Полей пока нет
             </DropdownMenuItem>
           ) : (
-            boards.map((b) => (
+            boards.map((board) => (
               <DropdownMenuItem
-                key={b.id}
+                key={board.id}
                 className="ui-hover flex items-center gap-2 text-xs"
-                onSelect={() => {
-                  if (!b.isActive) {
-                    setActiveMutation.mutate(
-                      { id: b.id },
-                      { onSuccess, onError: (e) => onError(e, "Не удалось переключить поле") },
-                    );
-                  }
-                }}
+                onSelect={() => onViewBoard(board.id)}
               >
                 <span className="flex size-3.5 items-center justify-center">
-                  {b.isActive ? <Check className="size-3.5 text-primary" /> : null}
+                  {viewedBoard?.id === board.id ? <Check className="size-3.5 text-primary" /> : null}
                 </span>
-                <span className="truncate">{b.name}</span>
-                <span className="ml-auto text-[10px] text-muted-foreground">
-                  {b.gridWidth}×{b.gridHeight}
-                </span>
+                <span className="truncate">{board.name}</span>
+                {board.isActive ? (
+                  <span className="ml-auto shrink-0 text-[10px] font-medium text-primary">у игроков</span>
+                ) : (
+                  <span className="ml-auto text-[10px] text-muted-foreground">
+                    {board.gridWidth}×{board.gridHeight}
+                  </span>
+                )}
               </DropdownMenuItem>
             ))
           )}
           <DropdownMenuSeparator />
+          {viewedBoard && !viewedBoard.isActive ? (
+            <DropdownMenuItem
+              className="ui-hover text-xs font-medium text-primary"
+              disabled={setActiveMutation.isPending}
+              onSelect={() =>
+                setActiveMutation.mutate(
+                  { id: viewedBoard.id },
+                  {
+                    onSuccess: () => {
+                      onSuccess();
+                      toast.success(`Поле «${viewedBoard.name}» теперь видно игрокам`);
+                    },
+                    onError: (error) => onError(error, "Не удалось активировать поле"),
+                  },
+                )
+              }
+            >
+              <MapIcon className="size-3.5" /> Сделать активным для игроков
+            </DropdownMenuItem>
+          ) : null}
           <DropdownMenuItem className="ui-hover text-xs" onSelect={() => setCreateOpen(true)}>
             <Plus className="size-3.5" /> Создать поле
           </DropdownMenuItem>
-          {activeBoard ? (
+          {viewedBoard ? (
             <>
               <DropdownMenuItem className="ui-hover text-xs" onSelect={() => setRenameOpen(true)}>
                 <Pencil className="size-3.5" /> Переименовать
@@ -223,12 +248,12 @@ function BoardsMenu({ boards, activeBoard }: { boards: BoardDto[]; activeBoard: 
         onOpenChange={setRenameOpen}
         title="Переименовать поле"
         confirmLabel="Сохранить"
-        initialName={activeBoard?.name ?? ""}
+        initialName={viewedBoard?.name ?? ""}
         pending={renameMutation.isPending}
         onSubmit={({ name }) =>
-          activeBoard &&
+          viewedBoard &&
           renameMutation.mutate(
-            { id: activeBoard.id, name },
+            { id: viewedBoard.id, name },
             {
               onSuccess: () => { onSuccess(); setRenameOpen(false); },
               onError: (e) => onError(e, "Не удалось переименовать поле"),
@@ -241,7 +266,7 @@ function BoardsMenu({ boards, activeBoard }: { boards: BoardDto[]; activeBoard: 
           <DialogHeader>
             <DialogTitle className="text-sm">Удалить поле</DialogTitle>
             <DialogDescription className="text-xs">
-              Поле «{activeBoard?.name}» и все его токены будут удалены безвозвратно.
+              Поле «{viewedBoard?.name}» и все его токены будут удалены безвозвратно.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -254,11 +279,15 @@ function BoardsMenu({ boards, activeBoard }: { boards: BoardDto[]; activeBoard: 
               disabled={removeMutation.isPending}
               className="ui-hover"
               onClick={() =>
-                activeBoard &&
+                viewedBoard &&
                 removeMutation.mutate(
-                  { id: activeBoard.id },
+                  { id: viewedBoard.id },
                   {
-                    onSuccess: () => { onSuccess(); setRemoveOpen(false); },
+                    onSuccess: () => {
+                      onViewBoard();
+                      onSuccess();
+                      setRemoveOpen(false);
+                    },
                     onError: (e) => onError(e, "Не удалось удалить поле"),
                   },
                 )
@@ -297,6 +326,8 @@ export interface GameHeaderProps {
   me: UserDto;
   boards: BoardDto[];
   activeBoard: BoardDto | null;
+  viewedBoard: BoardDto | null;
+  onViewBoard: (id?: number) => void;
   isMaster: boolean;
   gridOn: boolean;
   onGridChange: (value: boolean) => void;
@@ -310,6 +341,8 @@ export function GameHeader({
   me,
   boards,
   activeBoard,
+  viewedBoard,
+  onViewBoard,
   isMaster,
   gridOn,
   onGridChange,
@@ -330,7 +363,11 @@ export function GameHeader({
       <Separator orientation="vertical" className="mx-1 h-6" />
 
       {isMaster ? (
-        <BoardsMenu boards={boards} activeBoard={activeBoard} />
+        <BoardsMenu
+          boards={boards}
+          viewedBoard={viewedBoard}
+          onViewBoard={onViewBoard}
+        />
       ) : (
         <span className="flex h-8 max-w-56 items-center gap-1.5 truncate px-1 text-xs text-muted-foreground">
           <MapIcon className="size-3.5 shrink-0 text-primary" />
@@ -350,8 +387,8 @@ export function GameHeader({
             size="sm"
             className="ui-hover h-8 gap-1.5 text-xs"
             onClick={onAddToken}
-            disabled={!activeBoard}
-            title="Добавить токен в центр поля"
+            disabled={!viewedBoard}
+            title="Добавить токен в центр просматриваемого поля"
           >
             <Plus className="size-3.5" />
             <span className="hidden sm:inline">Токен</span>
@@ -363,8 +400,8 @@ export function GameHeader({
           size="sm"
           className="ui-hover h-8 gap-1.5 text-xs"
           onClick={onOpenInitiative}
-          disabled={!activeBoard}
-          title="Инициатива"
+          disabled={!viewedBoard}
+          title="Инициатива просматриваемого поля"
         >
           <ListOrdered className="size-3.5" />
           <span className="hidden sm:inline">Инициатива</span>
@@ -404,7 +441,7 @@ export function GameHeader({
             logoutMutation.mutate(undefined, {
               onSuccess: () => {
                 queryClient.clear();
-                invalidateAuth();
+                window.location.replace("/");
               },
               onError: (e) => toast.error(trpcErrorMessage(e, "Не удалось выйти")),
             })

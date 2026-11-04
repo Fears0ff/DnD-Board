@@ -96,13 +96,14 @@ export function TokenDialog({ state, board, onClose }: TokenDialogProps) {
     } else {
       addMutation.mutate(
         {
+          boardId: board.id,
           label: trimmed,
           kind,
           ownerId: owner,
           hp: safeHp,
           maxHp: safeMax,
           size: safeSize,
-          // новый токен появляется в центре активного поля
+          // новый токен появляется в центре просматриваемого поля
           cellX: Math.max(0, Math.floor((board.gridWidth - safeSize) / 2)),
           cellY: Math.max(0, Math.floor((board.gridHeight - safeSize) / 2)),
         },
@@ -137,7 +138,7 @@ export function TokenDialog({ state, board, onClose }: TokenDialogProps) {
             {isEdit ? `Токен «${token?.label}»` : "Новый токен"}
           </DialogTitle>
           <DialogDescription className="text-xs">
-            {isEdit ? "Изменение параметров токена." : "Токен появится в центре активного поля."}
+            {isEdit ? "Изменение параметров токена." : `Токен появится в центре поля «${board.name}».`}
           </DialogDescription>
         </DialogHeader>
 
