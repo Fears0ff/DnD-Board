@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,30 +11,44 @@ const root = process.cwd();
 const temp = mkdtempSync(join(tmpdir(), "dnd-source-import-"));
 const archive = join(temp, "source.tar.gz");
 const unpacked = join(temp, "source");
-mkdirSync(unpacked, { recursive: true });
+let stage = "archive download";
 
-const response = await fetch(archiveUrl);
-if (!response.ok) throw new Error(`Source archive download failed: ${response.status}`);
-writeFileSync(archive, Buffer.from(await response.arrayBuffer()));
-execFileSync("tar", ["-xzf", archive, "-C", unpacked]);
+try {
+  mkdirSync(unpacked, { recursive: true });
+  const response = await fetch(archiveUrl);
+  if (!response.ok) throw new Error(`Source archive download failed: ${response.status}`);
+  writeFileSync(archive, Buffer.from(await response.arrayBuffer()));
 
-const names = execFileSync("tar", ["-tzf", archive], { encoding: "utf8" })
-  .trim().split("\n").filter(Boolean);
-if (names.length !== 87) throw new Error(`Expected 87 source files, got ${names.length}`);
-for (const name of names) {
-  if (name.startsWith(".github/") || name.includes("..")) {
-    throw new Error(`Unsafe or forbidden archive path: ${name}`);
+  stage = "archive extraction";
+  execFileSync("tar", ["-xzf", archive, "-C", unpacked]);
+  const names = execFileSync("tar", ["-tzf", archive], { encoding: "utf8" })
+    .trim().split("\n").filter(Boolean);
+  if (names.length !== 87) throw new Error(`Expected 87 source files, got ${names.length}`);
+  for (const name of names) {
+    if (name.startsWith(".github/") || name.includes("..")) {
+      throw new Error(`Unsafe or forbidden archive path: ${name}`);
+    }
+    const destination = join(root, name);
+    mkdirSync(dirname(destination), { recursive: true });
+    cpSync(join(unpacked, name), destination, { recursive: true, force: true });
   }
-  const destination = join(root, name);
-  mkdirSync(dirname(destination), { recursive: true });
-  cpSync(join(unpacked, name), destination, { recursive: true, force: true });
-}
 
-rmSync(fileURLToPath(import.meta.url));
-execFileSync("npm", ["ci"], { cwd: root, stdio: "inherit" });
-execFileSync("git", ["config", "user.name", "github-actions[bot]"], { cwd: root });
-execFileSync("git", ["config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], { cwd: root });
-execFileSync("git", ["add", "--all"], { cwd: root });
-execFileSync("git", ["commit", "-m", "Add media, compendium, character sheets and desktop runtime"], { cwd: root, stdio: "inherit" });
-execFileSync("git", ["push", "origin", "main"], { cwd: root, stdio: "inherit" });
-rmSync(temp, { recursive: true, force: true });
+  stage = "final dependency installation";
+  rmSync(fileURLToPath(import.meta.url));
+  execFileSync("npm", ["ci", "--no-audit", "--no-fund"], { cwd: root, stdio: "inherit" });
+
+  stage = "source commit";
+  execFileSync("git", ["config", "user.name", "github-actions[bot]"], { cwd: root });
+  execFileSync("git", ["config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], { cwd: root });
+  execFileSync("git", ["add", "--all"], { cwd: root });
+  execFileSync("git", ["commit", "-m", "Add media, compendium, character sheets and desktop runtime"], { cwd: root, stdio: "inherit" });
+
+  stage = "source push";
+  execFileSync("git", ["push", "origin", "HEAD:main"], { cwd: root, stdio: "inherit" });
+} catch (error) {
+  const detail = (error instanceof Error ? error.message : String(error)).split("\n")[0];
+  console.error(`::error::Verified source import failed during ${stage}: ${detail}`);
+  process.exitCode = 1;
+} finally {
+  rmSync(temp, { recursive: true, force: true });
+}
