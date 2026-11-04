@@ -59,6 +59,8 @@ export const tokenAddInputSchema = z
     size: tokenSizeSchema.optional(),
     cellX: cellCoordSchema.optional(),
     cellY: cellCoordSchema.optional(),
+    // Master may target any board; without boardId the active board is used.
+    boardId: idSchema.optional(),
   })
   .refine((v) => v.hp <= v.maxHp, {
     message: "hp must be <= maxHp",
@@ -90,6 +92,12 @@ export type TokenMoveInput = z.infer<typeof tokenMoveInputSchema>;
 export const tokensClearInputSchema = z.object({ boardId: idSchema });
 export type TokensClearInput = z.infer<typeof tokensClearInputSchema>;
 
+export const tokenAdjustHpInputSchema = z.object({
+  id: idSchema,
+  delta: z.number().int().min(-1_000_000).max(1_000_000),
+});
+export type TokenAdjustHpInput = z.infer<typeof tokenAdjustHpInputSchema>;
+
 export interface TokenDto {
   id: number;
   boardId: number;
@@ -98,8 +106,9 @@ export interface TokenDto {
   ownerId: number | null;
   cellX: number;
   cellY: number;
-  hp: number;
-  maxHp: number;
+  /** Hidden (null) for viewers who may not see this token's HP. */
+  hp: number | null;
+  maxHp: number | null;
   size: number;
   imageKey: string | null;
 }
@@ -112,22 +121,43 @@ export const initiativeEntrySchema = z.object({
 });
 export type InitiativeEntry = z.infer<typeof initiativeEntrySchema>;
 
-// Applies to the currently active board; the board is resolved server-side.
+// Applies to the given board, or to the active board when boardId is omitted.
 export const initiativeSetInputSchema = z.object({
   entries: z.array(initiativeEntrySchema).max(500),
+  boardId: idSchema.optional(),
 });
 export type InitiativeSetInput = z.infer<typeof initiativeSetInputSchema>;
 
 /* ------------------------------- game.state -------------------------------- */
 
+/**
+ * Optional board selector for game.state. Only honored for the master:
+ * players always view the globally active board.
+ */
+export const gameStateInputSchema = z
+  .object({
+    boardId: idSchema.optional(),
+  })
+  .nullish()
+  // Legacy clients and thin HTTP helpers may encode "no input" as null.
+  .transform((input) => input ?? undefined);
+export type GameStateInput = z.infer<typeof gameStateInputSchema>;
+
 export interface GameStateDto {
   me: UserDto;
   revision: number;
   boards: BoardDto[];
+  /** The globally player-visible board. */
   activeBoard: BoardDto | null;
-  /** Tokens of the active board (empty when there is none). */
+  /**
+   * The board the requester actually views: for the master this may be any
+   * board (via gameStateInputSchema.boardId); for players it is always the
+   * active board. `tokens` and `initiative` belong to this board.
+   */
+  viewedBoard: BoardDto | null;
+  /** Tokens of the viewed board (empty when there is none). */
   tokens: TokenDto[];
-  /** Initiative of the active board (empty when there is none). */
+  /** Initiative of the viewed board (empty when there is none). */
   initiative: InitiativeEntry[];
 }
 

@@ -6,7 +6,7 @@ export const loginSchema = z
   .trim()
   .min(3, "Login must be at least 3 characters")
   .max(32)
-  .regex(/^[A-Za-z0-9_.-]+$/, "Login may contain letters, digits, _ . -");
+  .regex(/^[\p{L}\p{N}_.-]+$/u, "Login may contain letters, digits, _ . -");
 
 export const passwordSchema = z.string().min(8).max(128);
 

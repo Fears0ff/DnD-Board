@@ -3,8 +3,10 @@ import {
   boardCreateInputSchema,
   boardIdInputSchema,
   boardRenameInputSchema,
+  gameStateInputSchema,
   initiativeSetInputSchema,
   tokenAddInputSchema,
+  tokenAdjustHpInputSchema,
   tokenMoveInputSchema,
   tokenUpdateInputSchema,
   tokensClearInputSchema,
@@ -12,6 +14,7 @@ import {
 import { getDb } from "../../db/connection";
 import {
   addToken,
+  adjustTokenHp,
   clearTokens,
   createBoard,
   getGameState,
@@ -26,7 +29,9 @@ import {
 
 /** Snapshot read: any signed-in user may read the shared board state. */
 export const gameRouter = createRouter({
-  state: authedProcedure.query(({ ctx }) => getGameState(getDb(), ctx.user)),
+  state: authedProcedure
+    .input(gameStateInputSchema.optional())
+    .query(({ ctx, input }) => getGameState(getDb(), ctx.user, input)),
 });
 
 /** Boards are managed by the master only. */
@@ -77,6 +82,14 @@ export const tokensRouter = createRouter({
     return { token: value, revision };
   }),
 
+  // Master-only HP adjustment on any board, clamped to [0, maxHp].
+  adjustHp: masterProcedure
+    .input(tokenAdjustHpInputSchema)
+    .mutation(({ input }) => {
+      const { value, revision } = adjustTokenHp(getDb(), input);
+      return { token: value, revision };
+    }),
+
   remove: masterProcedure.input(boardIdInputSchema).mutation(({ input }) => {
     const { value, revision } = removeToken(getDb(), input.id);
     return { ...value, revision };
@@ -91,11 +104,12 @@ export const tokensRouter = createRouter({
 });
 
 export const initiativeRouter = createRouter({
-  // Manual numbers entered by the master for the active board.
+  // Manual numbers entered by the master; targets input.boardId or the
+  // active board when omitted.
   set: masterProcedure
     .input(initiativeSetInputSchema)
     .mutation(({ input }) => {
-      const { value, revision } = setInitiative(getDb(), input.entries);
+      const { value, revision } = setInitiative(getDb(), input.entries, input.boardId);
       return { initiative: value, revision };
     }),
 });

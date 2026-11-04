@@ -1,12 +1,14 @@
 import { TRPCError } from "@trpc/server";
 import type { AppDatabase, DbHandle } from "../../db/connection";
-import type { BoardRow, UserRow } from "../../db/schema";
+import type { BoardRow, TokenRow, UserRow } from "../../db/schema";
 import type {
   BoardCreateInput,
   BoardDto,
   GameStateDto,
+  GameStateInput,
   InitiativeEntry,
   TokenAddInput,
+  TokenAdjustHpInput,
   TokenDto,
   TokenUpdateInput,
 } from "../../contracts/game";
@@ -66,17 +68,45 @@ function requireActiveBoard(db: DbHandle): BoardRow {
   return board;
 }
 
-export function getGameState(db: DbHandle, user: UserRow): GameStateDto {
+export function getGameState(
+  db: DbHandle,
+  user: UserRow,
+  input?: GameStateInput,
+): GameStateDto {
   const allBoards = listBoards(db);
+  // The globally player-visible board, independent of any requested view.
   const active = allBoards.find((b) => b.isActive) ?? null;
-  const tokenRows = active ? listTokensByBoard(db, active.id) : [];
+
+  // Only the master may view a board other than the active one.
+  let viewed = active;
+  if (user.gameRole === "master" && input?.boardId !== undefined) {
+    const requested = findBoardById(db, input.boardId);
+    if (!requested) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Board not found" });
+    }
+    viewed = requested;
+  }
+
+  const isMaster = user.gameRole === "master";
+  const toVisibleTokenDto = (row: TokenRow): TokenDto => {
+    const dto = toTokenDto(row);
+    // HP is private: the master sees everything, a player only their own tokens.
+    if (!isMaster && row.ownerId !== user.id) {
+      dto.hp = null;
+      dto.maxHp = null;
+    }
+    return dto;
+  };
+
+  const tokenRows = viewed ? listTokensByBoard(db, viewed.id) : [];
   return {
     me: toUserDto(user),
     revision: getGameRevision(db),
     boards: allBoards.map(toBoardDto),
     activeBoard: active ? toBoardDto(active) : null,
-    tokens: tokenRows.map(toTokenDto),
-    initiative: active ? parseInitiative(active.initiative) : [],
+    viewedBoard: viewed ? toBoardDto(viewed) : null,
+    tokens: tokenRows.map(toVisibleTokenDto),
+    initiative: viewed ? parseInitiative(viewed.initiative) : [],
   };
 }
 
@@ -177,7 +207,12 @@ export function addToken(
 ): MutationResult<TokenDto> {
   const result = db.transaction((tx) => {
     const t = tx;
-    const board = requireActiveBoard(t);
+    // The master may add tokens to any board; without boardId the active
+    // board is used (backwards-compatible default).
+    const board =
+      input.boardId !== undefined
+        ? requireBoard(t, input.boardId)
+        : requireActiveBoard(t);
     const ownerId = input.ownerId ?? null;
     assertValidOwner(t, ownerId);
     const row = insertToken(t, {
@@ -185,7 +220,7 @@ export function addToken(
       kind: input.kind,
       label: input.label,
       ownerId,
-      // New tokens appear at the center of the active board by default.
+      // New tokens appear at the center of the target board by default.
       cellX: input.cellX ?? Math.floor(board.gridWidth / 2),
       cellY: input.cellY ?? Math.floor(board.gridHeight / 2),
       hp: input.hp,
@@ -294,6 +329,32 @@ export function moveToken(
   return result;
 }
 
+/**
+ * Master-only HP adjustment, clamped to [0, maxHp]. The master manages tokens
+ * on ANY board: board activity only controls what players see, not what the
+ * master may edit (unlike moveToken, which stays active-only for players).
+ */
+export function adjustTokenHp(
+  db: AppDatabase,
+  input: TokenAdjustHpInput,
+): MutationResult<TokenDto> {
+  const result = db.transaction((tx) => {
+    const t = tx;
+    const token = findTokenById(t, input.id);
+    if (!token) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Token not found" });
+    }
+    const hp = Math.min(Math.max(token.hp + input.delta, 0), token.maxHp);
+    const row = updateTokenRow(t, token.id, { hp });
+    if (!row) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Token not found" });
+    }
+    return { value: toTokenDto(row), revision: bumpGameRevision(t) };
+  });
+  publishGameChanged(result.revision);
+  return result;
+}
+
 export function removeToken(
   db: AppDatabase,
   id: number,
@@ -336,14 +397,20 @@ export function clearTokens(
 
 /* -------------------------------- initiative ------------------------------- */
 
-/** Master-only manual initiative for the ACTIVE board. No dice, no auto math. */
+/**
+ * Master-only manual initiative. No dice, no auto math. Targets the board
+ * given by `boardId`, or the active board when omitted; tokenIds are
+ * validated against the target board.
+ */
 export function setInitiative(
   db: AppDatabase,
   entries: InitiativeEntry[],
+  boardId?: number,
 ): MutationResult<InitiativeEntry[]> {
   const result = db.transaction((tx) => {
     const t = tx;
-    const board = requireActiveBoard(t);
+    const board =
+      boardId !== undefined ? requireBoard(t, boardId) : requireActiveBoard(t);
     const tokenIds = new Set(
       listTokensByBoard(t, board.id).map((token) => token.id),
     );
@@ -351,7 +418,7 @@ export function setInitiative(
     if (unknown.length > 0) {
       throw new TRPCError({
         code: "BAD_REQUEST",
-        message: `Initiative references tokens not on the active board: ${unknown
+        message: `Initiative references tokens not on the target board: ${unknown
           .map((e) => e.tokenId)
           .join(", ")}`,
       });
