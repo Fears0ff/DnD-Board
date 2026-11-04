@@ -9,8 +9,8 @@ files:
 asar: true
 asarUnpack:
   - dist/node_modules/**/*
-npmRebuild: false
 buildDependenciesFromSource: false
+beforeBuild: scripts/electron-before-build.cjs
 beforePack: scripts/electron-before-pack.cjs
 win:
   target:
