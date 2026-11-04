@@ -10,9 +10,9 @@ function annotationText(error) {
 
 /**
  * Precondition: build:desktop has already run `electron-builder install-app-deps`.
- * This hook runs before electron-builder's own dependency rebuild, so it must
- * copy the already-rebuilt Electron runtime into dist/node_modules. The Vite
- * build also runs after that rebuild and refreshes the same runtime for smoke.
+ * Packaging does not rebuild dependencies a second time (npmRebuild is false):
+ * this hook copies the already-rebuilt Electron runtime into dist/node_modules.
+ * The Vite build also refreshes that runtime for the preceding smoke test.
  */
 module.exports = async function beforePack(context) {
   try {
