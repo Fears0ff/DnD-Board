@@ -24,6 +24,21 @@ const child = spawn(electron, ["."], {
 });
 
 let output = "";
+
+function failSmoke(message) {
+  const desktopLog = path.join(temporary, "profile", "logs", "desktop.log");
+  const desktopOutput = fs.existsSync(desktopLog)
+    ? fs.readFileSync(desktopLog, "utf8")
+    : "<desktop.log was not created>";
+  const details = `${message}\n${output.slice(-8000)}\nDesktop log:\n${desktopOutput.slice(-8000)}`;
+  const annotation = details
+    .replaceAll("%", "%25")
+    .replaceAll("\r", "%0D")
+    .replaceAll("\n", "%0A");
+  console.error(`::error title=Desktop smoke diagnostics::${annotation}`);
+  throw new Error(details);
+}
+
 child.stdout.on("data", (chunk) => {
   output += chunk.toString();
   process.stdout.write(chunk);
@@ -43,12 +58,12 @@ try {
     child.once("exit", resolve);
   });
   if (code !== 0 || !fs.existsSync(marker)) {
-    throw new Error(`Desktop smoke failed (exit ${code}).\n${output.slice(-8000)}`);
+    failSmoke(`Desktop smoke failed (exit ${code}).`);
   }
   const database = fs
     .readdirSync(temporary, { recursive: true })
     .find((name) => String(name).endsWith("dnd-board.db"));
-  if (!database) throw new Error("Desktop smoke did not create its isolated database.");
+  if (!database) failSmoke("Desktop smoke did not create its isolated database.");
   console.log(fs.readFileSync(marker, "utf8"));
   console.log("Native Electron startup, server health gate and SQLite startup passed.");
 } finally {
