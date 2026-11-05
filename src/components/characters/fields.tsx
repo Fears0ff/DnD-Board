@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -8,15 +8,20 @@ export function SheetField({
   label,
   children,
   className,
+  htmlFor,
 }: {
   label?: string;
   children: ReactNode;
   className?: string;
+  htmlFor?: string;
 }) {
   return (
     <div className={className}>
       {label ? (
-        <Label className="text-[10px] uppercase tracking-wide text-muted-foreground">
+        <Label
+          htmlFor={htmlFor}
+          className="text-[10px] uppercase tracking-wide text-muted-foreground"
+        >
           {label}
         </Label>
       ) : null}
@@ -40,9 +45,11 @@ export function TextField({
   placeholder?: string;
   className?: string;
 }) {
+  const id = useId();
   return (
-    <SheetField label={label} className={className}>
+    <SheetField label={label} className={className} htmlFor={id}>
       <Input
+        id={id}
         className="ui-hover h-7 text-xs"
         value={value}
         maxLength={maxLength}
@@ -72,9 +79,11 @@ export function NumberField({
   max: number;
   className?: string;
 }) {
+  const id = useId();
   return (
-    <SheetField label={label} className={className}>
+    <SheetField label={label} className={className} htmlFor={id}>
       <Input
+        id={id}
         type="number"
         className="ui-hover h-7 text-xs"
         value={value}
@@ -105,9 +114,11 @@ export function TextAreaField({
   rows?: number;
   className?: string;
 }) {
+  const id = useId();
   return (
-    <SheetField label={label} className={className}>
+    <SheetField label={label} className={className} htmlFor={id}>
       <Textarea
+        id={id}
         className="ui-hover min-h-0 text-xs"
         value={value}
         rows={rows}

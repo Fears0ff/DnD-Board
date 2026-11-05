@@ -5,6 +5,7 @@ import type {
   CharacterCreateInput,
   CharacterDto,
   CharacterIdInput,
+  CharacterImportLssInput,
   CharacterSummaryDto,
   CharacterUpdateInput,
 } from "@contracts/characters";
@@ -32,6 +33,8 @@ export interface CharactersNotesApiExtension {
     create: MutationHook<CharacterCreateInput, CharacterDto>;
     update: MutationHook<CharacterUpdateInput, CharacterDto>;
     remove: MutationHook<CharacterIdInput, { removedId: number }>;
+    /** Импорт выгрузки Long Story Short; создаёт новый лист и возвращает его. */
+    importLss: MutationHook<CharacterImportLssInput, CharacterDto>;
   };
   notes: {
     list: QueryHook<undefined, NoteSummaryDto[]>;

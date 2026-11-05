@@ -11,6 +11,7 @@ import type {
 import type {
   CharacterCreateInput,
   CharacterDto,
+  CharacterImportLssInput,
   CharacterSummaryDto,
   CharacterUpdateInput,
 } from "@contracts/characters";
@@ -98,13 +99,13 @@ export interface ApiFacade {
     setGameRole: MutationHook<{ userId: number; gameRole: GameRole }, unknown>;
   };
   game: {
-    state: QueryHook<{ boardId?: number } | undefined, GameStateDto>;
+    state: QueryHook<{ boardId?: number; campaignId?: number } | undefined, GameStateDto>;
   };
   // Игровые мутации возвращают конверт { …, revision }; фронтенд опирается
   // на перечитывание game.state, поэтому тип результата намеренно unknown.
   boards: {
     create: MutationHook<
-      { name: string; cellSize?: number; gridWidth?: number; gridHeight?: number },
+      { name: string; campaignId?: number; cellSize?: number; gridWidth?: number; gridHeight?: number },
       unknown
     >;
     rename: MutationHook<{ id: number; name: string }, unknown>;
@@ -112,6 +113,12 @@ export interface ApiFacade {
     remove: MutationHook<{ id: number }, unknown>;
     setActive: MutationHook<{ id: number }, unknown>;
     setBackground: MutationHook<{ id: number; imageKey: string | null }, unknown>;
+  };
+  campaigns: {
+    create: MutationHook<{ name: string }, unknown>;
+    rename: MutationHook<{ id: number; name: string }, unknown>;
+    setActive: MutationHook<{ id: number | null }, unknown>;
+    remove: MutationHook<{ id: number }, unknown>;
   };
   tokens: {
     add: MutationHook<TokenAddInput, unknown>;
@@ -129,6 +136,7 @@ export interface ApiFacade {
     get: QueryHook<{ id: number }, CharacterDto>;
     create: MutationHook<CharacterCreateInput, CharacterDto>;
     update: MutationHook<CharacterUpdateInput, CharacterDto>;
+    importLss: MutationHook<CharacterImportLssInput, CharacterDto>;
     remove: MutationHook<{ id: number }, { removedId: number }>;
   };
   notes: {
