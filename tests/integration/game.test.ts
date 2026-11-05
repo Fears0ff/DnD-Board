@@ -117,6 +117,21 @@ describe("boards", () => {
     expect(state.activeBoard).toBeNull();
   });
 
+  it("resizes the grid and clamps out-of-bounds tokens without deleting them", async () => {
+    const created = await createBoard();
+    const caller = await masterCaller();
+    const { token } = await caller.tokens.add({
+      kind: "prop", label: "Statue", hp: 0, maxHp: 0,
+      boardId: created.board.id, cellX: 18, cellY: 8, size: 2,
+    });
+    const resized = await caller.boards.updateGrid({ id: created.board.id, gridWidth: 10, gridHeight: 6 });
+    expect(resized.board.gridWidth).toBe(10);
+    expect(resized.board.gridHeight).toBe(6);
+    const state = await caller.game.state();
+    expect(state.tokens).toHaveLength(1);
+    expect(state.tokens[0]).toMatchObject({ id: token.id, cellX: 8, cellY: 4 });
+  });
+
   it("remove of a missing board is 404", async () => {
     const caller = await masterCaller();
     await expectTrpcError(caller.boards.remove({ id: 4242 }), "NOT_FOUND");
@@ -124,6 +139,25 @@ describe("boards", () => {
 });
 
 describe("tokens", () => {
+  it("hides invisible token DTOs from players but preserves their initiative", async () => {
+    await createBoard();
+    const masterApi = await masterCaller();
+    const { token } = await masterApi.tokens.add({
+      kind: "hero", label: "Hidden hero", hp: 5, maxHp: 5,
+      ownerId: player.id, invisible: true, cellX: 1, cellY: 1,
+    });
+    await masterApi.initiative.set({ entries: [{ tokenId: token.id, value: 17 }] });
+    const playerState = await (await playerCaller()).game.state();
+    expect(playerState.tokens).toEqual([]);
+    expect(playerState.initiative).toEqual([{ tokenId: token.id, value: 17 }]);
+    await expectTrpcError(
+      (await playerCaller()).tokens.move({ tokenId: token.id, cellX: 2, cellY: 2 }),
+      "NOT_FOUND",
+    );
+    const masterState = await masterApi.game.state();
+    expect(masterState.tokens[0].invisible).toBe(true);
+  });
+
   it("requires an active board and master rights for add", async () => {
     const caller = await masterCaller();
     await expectTrpcError(
