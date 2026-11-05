@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { format } from "date-fns";
-import { Pencil, Plus, Trash2 } from "lucide-react";
+import { FileUp, Pencil, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import type { UserDto } from "@/lib/game-contract";
 import { trpcErrorMessage } from "@/lib/api";
 import { charactersApi, invalidateCharacters } from "@/hooks/useCharactersApi";
+import { boardImageUrl } from "@/lib/media";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -71,6 +72,8 @@ export function CharactersDialog({
   });
   const createMutation = charactersApi.create.useMutation();
   const removeMutation = charactersApi.remove.useMutation();
+  const importMutation = charactersApi.importLss.useMutation();
+  const importInputRef = useRef<HTMLInputElement | null>(null);
 
   const [newName, setNewName] = useState("");
   const [sourceCardId, setSourceCardId] = useState<string>("blank");
@@ -94,6 +97,30 @@ export function CharactersDialog({
         },
         onError: (err) =>
           toast.error(trpcErrorMessage(err, "Не удалось создать лист")),
+      },
+    );
+  };
+
+  /** Импорт выгрузки Long Story Short: выбор .json-файла, отправка текста. */
+  const importLssFile = async (file: File) => {
+    let jsonText: string;
+    try {
+      jsonText = await file.text();
+    } catch {
+      toast.error("Не удалось прочитать файл");
+      return;
+    }
+    importMutation.mutate(
+      { jsonText },
+      {
+        onSuccess: (created) => {
+          invalidateCharacters();
+          toast.success(`Импортирован персонаж «${created.name}»`);
+          setEditingId(created.id);
+          setEditorOpen(true);
+        },
+        onError: (err) =>
+          toast.error(trpcErrorMessage(err, "Не удалось импортировать файл LSS")),
       },
     );
   };
@@ -157,6 +184,29 @@ export function CharactersDialog({
             >
               <Plus className="size-3.5" /> Создать
             </Button>
+            <input
+              ref={importInputRef}
+              type="file"
+              accept=".json,application/json"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = "";
+                if (file) void importLssFile(file);
+              }}
+            />
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="ui-hover h-7 text-xs"
+              disabled={importMutation.isPending}
+              title="Импорт выгрузки Long Story Short (.json)"
+              onClick={() => importInputRef.current?.click()}
+            >
+              <FileUp className="size-3.5" />
+              {importMutation.isPending ? "Импорт…" : "Импорт LSS"}
+            </Button>
           </div>
 
           {listQuery.isLoading ? (
@@ -194,6 +244,13 @@ export function CharactersDialog({
                 {characters.map((ch) => (
                   <TableRow key={ch.id}>
                     <TableCell className="py-1 text-xs font-medium">
+                      {ch.portraitKey ? (
+                        <img
+                          src={boardImageUrl(ch.portraitKey)}
+                          alt=""
+                          className="mr-1.5 inline-block size-6 rounded-full object-cover align-middle"
+                        />
+                      ) : null}
                       {ch.name}
                       <Badge variant="secondary" className="ml-1.5 px-1 text-[10px]">
                         v{ch.version}

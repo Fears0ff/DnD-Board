@@ -24,9 +24,10 @@ import {
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { boardImageUrl } from "@/lib/media";
 import { TextField } from "./fields";
 import { AbilitiesTab, SkillsTab, SpellsTab } from "./tabsCore";
-import { AttacksTab, InventoryTab, TraitsTab, VitalsTab } from "./tabsExtra";
+import { AttacksTab, InventoryTab, LssExtensionTab, TraitsTab, VitalsTab } from "./tabsExtra";
 
 /** Гарант закрытия: регистрируется телом редактора, вызывается оболочкой. */
 export type CloseGuard = () => Promise<boolean>;
@@ -130,6 +131,8 @@ function CharacterEditorBody({
   const [name, setName] = useState(dto.name);
   const [sheet, setSheet] = useState<CharacterSheetData>(dto.data);
   const updateMutation = charactersApi.update.useMutation();
+  const hasLss = Boolean(dto.data.extensions?.longStoryShort);
+  const portraitUrl = dto.portraitKey ? boardImageUrl(dto.portraitKey) : null;
 
   const autosaveRef = useRef<VersionedAutosave | null>(null);
   const applyEntity = useCallback((fresh: CharacterDto) => {
@@ -186,6 +189,13 @@ function CharacterEditorBody({
   return (
     <>
       <div className="flex items-center gap-2">
+        {portraitUrl ? (
+          <img
+            src={portraitUrl}
+            alt="Портрет персонажа"
+            className="size-9 shrink-0 rounded-full border border-border object-cover"
+          />
+        ) : null}
         <div className="min-w-48 flex-1">
           <TextField
             value={name}
@@ -251,7 +261,9 @@ function CharacterEditorBody({
       ) : null}
 
       <Tabs defaultValue="abilities" className="flex min-h-0 flex-1 flex-col">
-        <TabsList className="grid h-auto w-full grid-cols-2 md:grid-cols-7">
+        <TabsList
+          className={`grid h-auto w-full grid-cols-2 ${hasLss ? "md:grid-cols-8" : "md:grid-cols-7"}`}
+        >
           <TabsTrigger value="abilities" className="ui-hover text-xs">Характеристики</TabsTrigger>
           <TabsTrigger value="skills" className="ui-hover text-xs">Навыки</TabsTrigger>
           <TabsTrigger value="spells" className="ui-hover text-xs">Заклинания</TabsTrigger>
@@ -259,6 +271,9 @@ function CharacterEditorBody({
           <TabsTrigger value="attacks" className="ui-hover text-xs">Атаки</TabsTrigger>
           <TabsTrigger value="traits" className="ui-hover text-xs">Свойства</TabsTrigger>
           <TabsTrigger value="vitals" className="ui-hover text-xs">Лист 2024</TabsTrigger>
+          {hasLss ? (
+            <TabsTrigger value="lss" className="ui-hover text-xs">LSS</TabsTrigger>
+          ) : null}
         </TabsList>
         <ScrollArea className="mt-3 min-h-0 flex-1 pr-3">
           <TabsContent value="abilities">
@@ -282,6 +297,11 @@ function CharacterEditorBody({
           <TabsContent value="vitals">
             <VitalsTab sheet={sheet} patch={patch} />
           </TabsContent>
+          {hasLss ? (
+            <TabsContent value="lss">
+              <LssExtensionTab sheet={sheet} patch={patch} />
+            </TabsContent>
+          ) : null}
         </ScrollArea>
       </Tabs>
     </>
