@@ -22,6 +22,15 @@ import {
   toCharacterSummaryDto,
   updateCharacterRow,
 } from "../repositories/characters";
+import { log } from "../lib/logger";
+import {
+  LssImportError,
+  fetchLssAvatarBytes,
+  parseLssExport,
+  type LssAvatar,
+} from "../lib/lssImport";
+import { validateImageBytes, MediaValidationError } from "../storage/validate";
+import { deleteAssetIfUnreferenced, uploadImage } from "./mediaService";
 
 /**
  * Character sheet operations. Sheets have NO realtime revision: clients
@@ -157,15 +166,120 @@ export function updateCharacter(
   });
 }
 
+/**
+ * Удаление листа: портрет (media_assets) удаляется ПОСЛЕ коммита и только
+ * best-effort — сбой очистки никогда не отменяет удаление листа, а сироту
+ * позже соберёт фоновая чистка.
+ */
 export function removeCharacter(
   db: AppDatabase,
   user: UserRow,
   id: number,
 ): { removedId: number } {
-  return db.transaction((tx) => {
+  const result = db.transaction((tx) => {
     const row = requireAccessibleSheet(tx, user, id);
+    const portraitKey = row.portraitKey ?? null;
     deleteCharacterRow(tx, row.id);
     // tokens.characterId references are cleared by ON DELETE SET NULL.
-    return { removedId: row.id };
+    return { removedId: row.id, portraitKey };
   });
+  if (result.portraitKey) {
+    void deleteAssetIfUnreferenced(db, result.portraitKey).catch((err) =>
+      log.warn("character portrait cleanup failed", {
+        key: result.portraitKey,
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    );
+  }
+  return { removedId: result.removedId };
+}
+
+/* --------------------------- Long Story Short import ----------------------- */
+
+/** Avatar problems never block the import: log and continue without one. */
+async function importPortrait(
+  db: AppDatabase,
+  user: UserRow,
+  avatar: LssAvatar,
+): Promise<string | null> {
+  try {
+    let bytes: Uint8Array;
+    if (avatar.kind === "base64") {
+      bytes = Buffer.from(avatar.dataBase64, "base64");
+    } else {
+      bytes = await fetchLssAvatarBytes(avatar.url);
+    }
+    validateImageBytes(bytes); // throws MediaValidationError on bad bytes
+    const asset = await uploadImage(db, user, {
+      dataBase64: Buffer.from(bytes).toString("base64"),
+      purpose: "characterSheet",
+    });
+    return asset.key;
+  } catch (err) {
+    if (
+      err instanceof LssImportError ||
+      err instanceof MediaValidationError ||
+      err instanceof TRPCError
+    ) {
+      log.warn("LSS avatar skipped", {
+        userId: user.id,
+        error: err.message,
+      });
+      return null;
+    }
+    throw err;
+  }
+}
+
+/**
+ * `characters.importLss`: parses a Long Story Short export and ALWAYS creates
+ * a new sheet owned by the caller. Avatar (base64 or allowlisted HTTPS URL)
+ * is fetched/validated/stored server-side as a media asset; its key goes to
+ * characters.portrait_key. If the sheet insert fails after the upload, the
+ * asset is deleted best-effort.
+ */
+export async function importLssCharacter(
+  db: AppDatabase,
+  user: UserRow,
+  jsonText: string,
+): Promise<CharacterDto> {
+  let parsed;
+  try {
+    parsed = parseLssExport(jsonText);
+  } catch (err) {
+    if (err instanceof LssImportError) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+    }
+    throw err;
+  }
+
+  const portraitKey = parsed.avatar
+    ? await importPortrait(db, user, parsed.avatar)
+    : null;
+
+  try {
+    return db.transaction((tx) =>
+      toCharacterDto(
+        insertCharacter(tx, {
+          ownerId: user.id,
+          name: parsed.name,
+          data: parsed.data,
+          portraitKey,
+        }),
+      ),
+    );
+  } catch (err) {
+    // Compensation: a portrait uploaded for a sheet that failed to insert
+    // must not linger (it would be orphaned only after 24h otherwise).
+    if (portraitKey) {
+      await deleteAssetIfUnreferenced(db, portraitKey).catch((cleanupErr) =>
+        log.error("LSS import portrait compensation failed", {
+          key: portraitKey,
+          error:
+            cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr),
+        }),
+      );
+    }
+    throw err;
+  }
 }
