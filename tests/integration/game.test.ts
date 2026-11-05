@@ -59,6 +59,138 @@ describe("game.state", () => {
   });
 });
 
+describe("campaigns", () => {
+  it("is master-only and keeps a single active campaign", async () => {
+    const dm = await masterCaller();
+    const first = (await dm.game.state()).activeCampaign!;
+    const second = await dm.campaigns.create({ name: "Second" });
+    expect(first.isActive).toBe(true);
+    expect(second.campaign.isActive).toBe(false);
+
+    await dm.campaigns.setActive({ id: second.campaign.id });
+    const state = await dm.game.state();
+    expect(state.activeCampaign?.id).toBe(second.campaign.id);
+    expect(state.campaigns.filter((campaign) => campaign.isActive)).toHaveLength(1);
+    await expectTrpcError(
+      (await playerCaller()).campaigns.create({ name: "Nope" }),
+      "FORBIDDEN",
+    );
+  });
+
+  it("renames a campaign and lets the master clear player visibility", async () => {
+    const dm = await masterCaller();
+    const created = { campaign: (await dm.game.state()).activeCampaign! };
+    await createBoard("Hidden board");
+    const renamed = await dm.campaigns.rename({ id: created.campaign.id, name: "New" });
+    expect(renamed.campaign.name).toBe("New");
+
+    await dm.campaigns.setActive({ id: null });
+    const playerState = await (await playerCaller()).game.state();
+    expect(playerState.activeCampaign).toBeNull();
+    expect(playerState.viewedCampaign).toBeNull();
+    expect(playerState.activeBoard).toBeNull();
+    expect(playerState.viewedBoard).toBeNull();
+    expect(playerState.boards).toEqual([]);
+    expect(playerState.tokens).toEqual([]);
+    expect(playerState.initiative).toEqual([]);
+
+    const masterState = await dm.game.state();
+    expect(masterState.viewedCampaign?.id).toBe(created.campaign.id);
+    expect(masterState.viewedBoard?.name).toBe("Hidden board");
+  });
+
+  it("returns only active-campaign boards to players and supports master viewing", async () => {
+    const dm = await masterCaller();
+    const first = { campaign: (await dm.game.state()).activeCampaign! };
+    const firstBoard = await createBoard("First board");
+    const second = await dm.campaigns.create({ name: "Second" });
+    const secondBoard = await dm.boards.create({
+      name: "Second board", campaignId: second.campaign.id,
+    });
+
+    const viewed = await dm.game.state({ campaignId: second.campaign.id });
+    expect(viewed.boards.map((board) => board.id)).toEqual([secondBoard.board.id]);
+    expect(viewed.activeBoard?.id).toBe(firstBoard.board.id);
+    expect(viewed.viewedCampaign?.id).toBe(second.campaign.id);
+
+    const playerState = await (await playerCaller()).game.state({
+      campaignId: second.campaign.id,
+      boardId: secondBoard.board.id,
+    });
+    expect(playerState.viewedCampaign?.id).toBe(first.campaign.id);
+    expect(playerState.boards.map((board) => board.id)).toEqual([firstBoard.board.id]);
+    expect(playerState.viewedBoard?.id).toBe(firstBoard.board.id);
+  });
+
+  it("activates a board's campaign and replaces a removed active board only inside it", async () => {
+    const dm = await masterCaller();
+    await dm.campaigns.create({ name: "First" });
+    const oldBoard = await createBoard("Old active");
+    const second = await dm.campaigns.create({ name: "Second" });
+    const first = await dm.boards.create({ name: "One", campaignId: second.campaign.id });
+    const next = await dm.boards.create({ name: "Two", campaignId: second.campaign.id });
+    expect(first.board.isActive).toBe(false);
+
+    await dm.boards.setActive({ id: first.board.id });
+    let state = await dm.game.state();
+    expect(state.activeCampaign?.id).toBe(second.campaign.id);
+    expect(state.activeBoard?.id).toBe(first.board.id);
+    expect(state.boards.find((board) => board.id === oldBoard.board.id)).toBeUndefined();
+
+    await dm.boards.remove({ id: first.board.id });
+    state = await dm.game.state({ campaignId: second.campaign.id });
+    expect(state.activeCampaign?.id).toBe(second.campaign.id);
+    expect(state.activeBoard?.id).toBe(next.board.id);
+  });
+
+  it("activates the first board of an empty active campaign even when others exist", async () => {
+    const dm = await masterCaller();
+    await dm.campaigns.create({ name: "First" });
+    await createBoard("Existing elsewhere");
+    const second = await dm.campaigns.create({ name: "Second" });
+    await dm.campaigns.setActive({ id: second.campaign.id });
+    expect((await dm.game.state()).activeBoard).toBeNull();
+    const created = await dm.boards.create({ name: "First here", campaignId: second.campaign.id });
+    expect(created.board.isActive).toBe(true);
+  });
+
+  it("cascades campaign removal and activates the next campaign", async () => {
+    const dm = await masterCaller();
+    const first = { campaign: (await dm.game.state()).activeCampaign! };
+    const board = await createBoard("Doomed");
+    const { token } = await dm.tokens.add({ kind: "prop", label: "Doomed token", hp: 0, maxHp: 0 });
+    const second = await dm.campaigns.create({ name: "Second" });
+    await dm.boards.create({ name: "Survivor", campaignId: second.campaign.id });
+
+    await dm.campaigns.remove({ id: first.campaign.id });
+    const state = await dm.game.state();
+    expect(state.activeCampaign?.id).toBe(second.campaign.id);
+    expect(state.activeBoard?.name).toBe("Survivor");
+    expect(state.campaigns.map((campaign) => campaign.id)).not.toContain(first.campaign.id);
+    expect(testDb.db.$client.prepare("SELECT COUNT(*) AS n FROM boards WHERE id = ?").get(board.board.id)).toEqual({ n: 0 });
+    expect(testDb.db.$client.prepare("SELECT COUNT(*) AS n FROM tokens WHERE id = ?").get(token.id)).toEqual({ n: 0 });
+  });
+
+  it("rejects player movement after their board's campaign becomes inactive", async () => {
+    const dm = await masterCaller();
+    const first = { campaign: (await dm.game.state()).activeCampaign! };
+    await createBoard();
+    const { token } = await dm.tokens.add({
+      kind: "hero", label: "Owned", ownerId: player.id, hp: 5, maxHp: 5,
+    });
+    const second = await dm.campaigns.create({ name: "Second" });
+    await dm.campaigns.setActive({ id: second.campaign.id });
+
+    await expectTrpcError(
+      (await playerCaller()).tokens.move({ tokenId: token.id, cellX: 2, cellY: 2 }),
+      "BAD_REQUEST",
+    );
+    expect((await dm.game.state({ campaignId: first.campaign.id })).tokens[0]).toMatchObject({
+      id: token.id, cellX: 10, cellY: 5,
+    });
+  });
+});
+
 describe("boards", () => {
   it("is master-only", async () => {
     const caller = await playerCaller();

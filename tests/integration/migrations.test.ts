@@ -32,6 +32,7 @@ describe("migration runner", () => {
       "users",
       "app_meta",
       "media_assets",
+      "campaigns",
       "boards",
       "tokens",
       "characters",
@@ -42,7 +43,7 @@ describe("migration runner", () => {
     }
     expect(tables).not.toContain("tables"); // no such entity by design
 
-    expect(appliedVersions(testDb.db.$client)).toEqual(["0001", "0002", "0003"]);
+    expect(appliedVersions(testDb.db.$client)).toEqual(["0001", "0002", "0003", "0004", "0005"]);
 
     const meta = testDb.db.$client
       .prepare("SELECT game_revision, compendium_revision FROM app_meta WHERE id = 1")
@@ -59,7 +60,7 @@ describe("migration runner", () => {
   it("is idempotent: re-running migrations applies nothing", () => {
     const result = migrate(testDb.db.$client);
     expect(result.applied).toEqual([]);
-    expect(result.alreadyApplied).toEqual(["0001", "0002", "0003"]);
+    expect(result.alreadyApplied).toEqual(["0001", "0002", "0003", "0004", "0005"]);
   });
 
   it("upgrades a fixture database without losing existing data", () => {
@@ -90,9 +91,9 @@ describe("migration runner", () => {
 
       // Upgrade path: apply the remaining migrations.
       const result = migrate(sqlite);
-      expect(result.applied).toEqual(["0002", "0003"]);
+      expect(result.applied).toEqual(["0002", "0003", "0004", "0005"]);
       expect(result.alreadyApplied).toEqual(["0001"]);
-      expect(appliedVersions(sqlite)).toEqual(["0001", "0002", "0003"]);
+      expect(appliedVersions(sqlite)).toEqual(["0001", "0002", "0003", "0004", "0005"]);
 
       // Data survived the upgrade.
       const user = sqlite
@@ -112,6 +113,16 @@ describe("migration runner", () => {
         .prepare("SELECT COUNT(*) AS n FROM boards WHERE is_active = 1")
         .get() as { n: number };
       expect(active.n).toBe(1);
+      const board = sqlite
+        .prepare("SELECT campaign_id FROM boards WHERE id = 1")
+        .get() as { campaign_id: number };
+      expect(board.campaign_id).toBe(1);
+      const campaign = sqlite
+        .prepare("SELECT name, is_active FROM campaigns WHERE id = 1")
+        .get() as { name: string; is_active: number };
+      expect(campaign).toEqual({ name: "Основная кампания", is_active: 1 });
+      const characterColumns = sqlite.pragma("table_info(characters)") as Array<{ name: string }>;
+      expect(characterColumns.some((column) => column.name === "portrait_key")).toBe(true);
     } finally {
       sqlite.close();
       fs.rmSync(dir, { recursive: true, force: true });
