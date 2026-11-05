@@ -3,9 +3,9 @@ import { z } from "zod";
 /**
  * Personal Markdown notes contracts.
  *
- * Notes are strictly private to their owner: even a master cannot read,
- * update or delete another user's note (inaccessible notes answer 404).
- * Notes are not part of any realtime broadcast.
+ * Notes are private by default. The owner may grant read-only access to any
+ * number of users. Only the owner can edit, delete or manage recipients;
+ * inaccessible notes answer 404. Open note lists poll for changes.
  *
  * Shared with the frontend bundle: keep free of Node-only imports.
  */
@@ -37,6 +37,12 @@ export const noteUpdateInputSchema = z
   });
 export type NoteUpdateInput = z.infer<typeof noteUpdateInputSchema>;
 
+export const noteSharesInputSchema = z.object({
+  id: idSchema,
+  userIds: z.array(idSchema).max(100).transform((ids) => [...new Set(ids)]),
+});
+export type NoteSharesInput = z.infer<typeof noteSharesInputSchema>;
+
 /** List payload: no note body. */
 export interface NoteSummaryDto {
   id: number;
@@ -45,6 +51,10 @@ export interface NoteSummaryDto {
   /** ISO-8601 timestamps. */
   createdAt: string;
   updatedAt: string;
+  ownerId: number;
+  ownerName: string;
+  isOwner: boolean;
+  sharedWith: Array<{ id: number; login: string; displayName: string }>;
 }
 
 export interface NoteDto extends NoteSummaryDto {

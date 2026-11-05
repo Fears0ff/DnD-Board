@@ -1,5 +1,5 @@
 appId: local.dndboard.desktop
-productName: DnD Board
+productName: DnD WormsBoard
 directories:
   output: release
 files:
@@ -18,11 +18,11 @@ win:
   target:
     - target: nsis
       arch: [x64]
-  artifactName: DnD-Board-Setup-${version}.${ext}
+  artifactName: DnD-WormsBoard-Setup-${version}.${ext}
 nsis:
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: DnD Board
+  shortcutName: DnD WormsBoard

@@ -3,7 +3,7 @@ const path = require("node:path");
 const { version } = require("../package.json");
 
 module.exports = async function afterAllArtifactBuild(buildResult) {
-  const expectedName = `DnD-Board-Setup-${version}.exe`;
+  const expectedName = `DnD-WormsBoard-Setup-${version}.exe`;
   const expectedPath = path.resolve(buildResult.outDir, expectedName);
   const isReported = buildResult.artifactPaths.some(
     (artifact) => path.resolve(artifact) === expectedPath,

@@ -41,6 +41,7 @@ export function toTokenDto(row: TokenRow): TokenDto {
     hp: row.hp,
     maxHp: row.maxHp,
     size: row.size,
+    invisible: row.invisible,
     imageKey: row.imageKey,
   };
 }
@@ -109,6 +110,20 @@ export function renameBoardRow(
   return db
     .update(boards)
     .set({ name, updatedAt: Date.now() })
+    .where(eq(boards.id, id))
+    .returning()
+    .get();
+}
+
+export function setBoardGridSize(
+  db: Db,
+  id: number,
+  gridWidth: number,
+  gridHeight: number,
+): BoardRow | undefined {
+  return db
+    .update(boards)
+    .set({ gridWidth, gridHeight, updatedAt: Date.now() })
     .where(eq(boards.id, id))
     .returning()
     .get();
@@ -194,6 +209,7 @@ export function updateTokenRow(
       | "hp"
       | "maxHp"
       | "size"
+      | "invisible"
       | "cellX"
       | "cellY"
       | "imageKey"

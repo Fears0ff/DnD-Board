@@ -4,6 +4,7 @@ import {
   boardIdInputSchema,
   boardRenameInputSchema,
   boardSetBackgroundInputSchema,
+  boardUpdateGridInputSchema,
   gameStateInputSchema,
   initiativeSetInputSchema,
   tokenAddInputSchema,
@@ -26,6 +27,7 @@ import {
   setActiveBoard,
   setBoardBackground,
   setInitiative,
+  updateBoardGrid,
   updateToken,
 } from "../services/gameService";
 
@@ -49,6 +51,15 @@ export const boardsRouter = createRouter({
     .input(boardRenameInputSchema)
     .mutation(({ input }) => {
       const { value, revision } = renameBoard(getDb(), input.id, input.name);
+      return { board: value, revision };
+    }),
+
+  updateGrid: masterProcedure
+    .input(boardUpdateGridInputSchema)
+    .mutation(({ input }) => {
+      const { value, revision } = updateBoardGrid(
+        getDb(), input.id, input.gridWidth, input.gridHeight,
+      );
       return { board: value, revision };
     }),
 

@@ -2,6 +2,7 @@ import { authedProcedure, createRouter } from "../middleware";
 import {
   noteCreateInputSchema,
   noteIdInputSchema,
+  noteSharesInputSchema,
   noteUpdateInputSchema,
 } from "../../contracts/notes";
 import { getDb } from "../../db/connection";
@@ -9,17 +10,28 @@ import {
   createNote,
   getNote,
   listNotes,
+  listNoteShareCandidates,
   removeNote,
+  setNoteShares,
   updateNote,
 } from "../services/noteService";
 
 /**
- * Personal Markdown notes. Strictly private to the owner — even the master
- * gets 404 for another user's note. No realtime broadcast; mutations return
- * the new `version` for optimistic concurrency.
+ * Private-by-default Markdown notes with owner-managed read-only sharing.
+ * Content writes use optimistic concurrency; open lists poll for changes.
  */
 export const notesRouter = createRouter({
   list: authedProcedure.query(({ ctx }) => listNotes(getDb(), ctx.user)),
+
+  shareCandidates: authedProcedure.query(({ ctx }) =>
+    listNoteShareCandidates(getDb(), ctx.user),
+  ),
+
+  setShares: authedProcedure
+    .input(noteSharesInputSchema)
+    .mutation(({ ctx, input }) =>
+      setNoteShares(getDb(), ctx.user, input.id, input.userIds),
+    ),
 
   get: authedProcedure
     .input(noteIdInputSchema)

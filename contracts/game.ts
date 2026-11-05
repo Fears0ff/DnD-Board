@@ -32,6 +32,13 @@ export const boardRenameInputSchema = z.object({
 });
 export type BoardRenameInput = z.infer<typeof boardRenameInputSchema>;
 
+export const boardUpdateGridInputSchema = z.object({
+  id: idSchema,
+  gridWidth: z.number().int().min(1).max(500),
+  gridHeight: z.number().int().min(1).max(500),
+});
+export type BoardUpdateGridInput = z.infer<typeof boardUpdateGridInputSchema>;
+
 export const boardIdInputSchema = z.object({ id: idSchema });
 export type BoardIdInput = z.infer<typeof boardIdInputSchema>;
 
@@ -62,6 +69,7 @@ export const tokenAddInputSchema = z
     hp: hpSchema,
     maxHp: hpSchema,
     size: tokenSizeSchema.optional(),
+    invisible: z.boolean().optional(),
     cellX: cellCoordSchema.optional(),
     cellY: cellCoordSchema.optional(),
     // Master may target any board; without boardId the active board is used.
@@ -91,6 +99,7 @@ export const tokenUpdateInputSchema = z.object({
   hp: hpSchema.optional(),
   maxHp: hpSchema.optional(),
   size: tokenSizeSchema.optional(),
+  invisible: z.boolean().optional(),
   cellX: cellCoordSchema.optional(),
   cellY: cellCoordSchema.optional(),
   // null clears the image; undefined leaves it unchanged.
@@ -135,6 +144,8 @@ export interface TokenDto {
   hp: number | null;
   maxHp: number | null;
   size: number;
+  /** Always false in player DTOs; invisible tokens are omitted entirely. */
+  invisible: boolean;
   imageKey: string | null;
 }
 
