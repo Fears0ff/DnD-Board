@@ -19,6 +19,7 @@ import type {
   NoteDto,
   NoteSummaryDto,
   NoteUpdateInput,
+  NoteSharesInput,
 } from "@contracts/notes";
 import type { MediaAssetDto, UploadImageInput } from "@contracts/media";
 import type {
@@ -107,6 +108,7 @@ export interface ApiFacade {
       unknown
     >;
     rename: MutationHook<{ id: number; name: string }, unknown>;
+    updateGrid: MutationHook<{ id: number; gridWidth: number; gridHeight: number }, unknown>;
     remove: MutationHook<{ id: number }, unknown>;
     setActive: MutationHook<{ id: number }, unknown>;
     setBackground: MutationHook<{ id: number; imageKey: string | null }, unknown>;
@@ -134,6 +136,8 @@ export interface ApiFacade {
     get: QueryHook<{ id: number }, NoteDto>;
     create: MutationHook<NoteCreateInput, NoteDto>;
     update: MutationHook<NoteUpdateInput, NoteDto>;
+    shareCandidates: QueryHook<undefined, UserDto[]>;
+    setShares: MutationHook<NoteSharesInput, NoteDto>;
     remove: MutationHook<{ id: number }, { removedId: number }>;
   };
   media: {

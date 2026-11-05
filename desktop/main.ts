@@ -14,6 +14,10 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 
+// Preserve the original Electron userData directory (database, uploads,
+// backups and sessions) after the visible product rename.
+app.setName("DnD Board");
+
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let server: ChildProcess | null = null;
@@ -162,7 +166,7 @@ function loadingPage(): void {
     ? `<p>Локальный адрес: <strong>${serverUrl}</strong></p>`
     : "";
   void mainWindow?.loadURL(
-    `data:text/html;charset=utf-8,${encodeURIComponent(`<!doctype html><html lang="ru"><meta charset="utf-8"><body style="margin:0;background:#101712;color:#d7e8b9;font:16px system-ui;display:grid;place-items:center;height:100vh"><main><h1>DnD Board</h1><p>Запуск локального игрового пространства…</p>${location}</main></body></html>`)}`,
+    `data:text/html;charset=utf-8,${encodeURIComponent(`<!doctype html><html lang="ru"><meta charset="utf-8"><body style="margin:0;background:#101712;color:#d7e8b9;font:16px system-ui;display:grid;place-items:center;height:100vh"><main><h1>DnD WormsBoard</h1><p>Запуск локального игрового пространства…</p>${location}</main></body></html>`)}`,
   );
 }
 
@@ -174,7 +178,7 @@ function createWindow(): void {
     minHeight: 640,
     show: false,
     backgroundColor: "#101712",
-    title: "DnD Board",
+    title: "DnD WormsBoard",
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -204,10 +208,10 @@ function createWindow(): void {
 function createTray(): void {
   tray?.destroy();
   tray = new Tray(trayImage());
-  tray.setToolTip("DnD Board");
+  tray.setToolTip("DnD WormsBoard");
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: "Открыть DnD Board", click: () => mainWindow?.show() },
+      { label: "Открыть DnD WormsBoard", click: () => mainWindow?.show() },
       {
         label: serverUrl || "Локальный сервер запускается…",
         enabled: Boolean(serverUrl),
@@ -275,7 +279,7 @@ if (!hasLock) {
       writeLog(`startup failed ${message}`);
       await dialog.showMessageBox({
         type: "error",
-        title: "DnD Board не запущен",
+        title: "DnD WormsBoard не запущен",
         message,
         detail: `Журнал: ${logFile}`,
       });

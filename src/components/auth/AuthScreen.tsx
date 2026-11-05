@@ -69,7 +69,7 @@ export function AuthScreen() {
         <div className="flex flex-col items-center gap-2 text-center">
           <BrandMark className="size-9" />
           <div>
-            <h1 className="text-lg font-semibold tracking-wide">DnD Board</h1>
+            <h1 className="text-lg font-semibold tracking-wide">DnD WormsBoard</h1>
             <p className="text-xs text-muted-foreground">
               Общее игровое поле для D&D в локальной сети
             </p>

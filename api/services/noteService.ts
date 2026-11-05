@@ -12,61 +12,51 @@ import {
   deleteNoteRow,
   findNoteById,
   insertNote,
+  isNoteSharedWith,
   listNotesByUser,
+  replaceNoteShares,
   toNoteDto,
   toNoteSummaryDto,
   updateNoteRow,
 } from "../repositories/notes";
+import { findUserById, listUsers, toUserDto } from "../repositories/users";
 
-/**
- * Personal Markdown notes. Strictly private: only the owner may list, read,
- * update or remove them — even a master gets 404 for another user's note.
- * Notes are not broadcast over realtime. Mutations return the full DTO whose
- * `version` is the new optimistic-concurrency version.
- */
+function notFound(): never {
+  throw new TRPCError({ code: "NOT_FOUND", message: "Note not found" });
+}
 
 function requireOwnNote(db: DbHandle, user: UserRow, id: number): NoteRow {
   const row = findNoteById(db, id);
-  if (!row || row.userId !== user.id) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Note not found" });
-  }
+  if (!row || row.userId !== user.id) return notFound();
+  return row;
+}
+
+function requireReadableNote(db: DbHandle, user: UserRow, id: number): NoteRow {
+  const row = findNoteById(db, id);
+  if (!row || (row.userId !== user.id && !isNoteSharedWith(db, id, user.id))) return notFound();
   return row;
 }
 
 export function listNotes(db: DbHandle, user: UserRow): NoteSummaryDto[] {
-  return listNotesByUser(db, user.id).map(toNoteSummaryDto);
+  return listNotesByUser(db, user.id).map((row) => toNoteSummaryDto(db, row, user.id));
+}
+
+export function listNoteShareCandidates(db: DbHandle, user: UserRow) {
+  return listUsers(db).filter((candidate) => candidate.id !== user.id).map(toUserDto);
 }
 
 export function getNote(db: DbHandle, user: UserRow, id: number): NoteDto {
-  return toNoteDto(requireOwnNote(db, user, id));
+  return toNoteDto(db, requireReadableNote(db, user, id), user.id);
 }
 
-export function createNote(
-  db: AppDatabase,
-  user: UserRow,
-  input: NoteCreateInput,
-): NoteDto {
+export function createNote(db: AppDatabase, user: UserRow, input: NoteCreateInput): NoteDto {
   return db.transaction((tx) =>
-    toNoteDto(
-      insertNote(tx, {
-        userId: user.id,
-        title: input.title,
-        content: input.content,
-      }),
-    ),
+    toNoteDto(tx, insertNote(tx, { userId: user.id, title: input.title, content: input.content }), user.id),
   );
 }
 
-/**
- * Owner-only update with optimistic concurrency. A stale `expectedVersion`
- * never overwrites: the guarded UPDATE touches 0 rows and the caller gets
- * 409 plus the CURRENT entity/version in the error cause.
- */
-export function updateNote(
-  db: AppDatabase,
-  user: UserRow,
-  input: NoteUpdateInput,
-): NoteDto {
+/** Owner-only update with optimistic concurrency. */
+export function updateNote(db: AppDatabase, user: UserRow, input: NoteUpdateInput): NoteDto {
   return db.transaction((tx) => {
     const row = requireOwnNote(tx, user, input.id);
     const updated = updateNoteRow(tx, row.id, input.expectedVersion, {
@@ -75,22 +65,36 @@ export function updateNote(
     });
     if (!updated) {
       const fresh = findNoteById(tx, row.id);
-      const current = fresh ? toNoteDto(fresh) : toNoteDto(row);
+      const current = toNoteDto(tx, fresh ?? row, user.id);
       throw new TRPCError({
         code: "CONFLICT",
         message: `Note was modified concurrently; current version is ${current.version}`,
         cause: versionConflictCause(current),
       });
     }
-    return toNoteDto(updated);
+    return toNoteDto(tx, updated, user.id);
   });
 }
 
-export function removeNote(
+export function setNoteShares(
   db: AppDatabase,
   user: UserRow,
   id: number,
-): { removedId: number } {
+  userIds: number[],
+): NoteDto {
+  return db.transaction((tx) => {
+    const row = requireOwnNote(tx, user, id);
+    for (const userId of userIds) {
+      if (userId === user.id || !findUserById(tx, userId)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid note recipient" });
+      }
+    }
+    replaceNoteShares(tx, id, userIds);
+    return toNoteDto(tx, row, user.id);
+  });
+}
+
+export function removeNote(db: AppDatabase, user: UserRow, id: number): { removedId: number } {
   return db.transaction((tx) => {
     const row = requireOwnNote(tx, user, id);
     deleteNoteRow(tx, row.id);

@@ -3,6 +3,7 @@ import {
   check,
   index,
   integer,
+  primaryKey,
   real,
   sqliteTable,
   text,
@@ -196,6 +197,7 @@ export const tokens = sqliteTable(
     maxHp: integer("max_hp").notNull().default(0),
     // Token footprint in grid squares.
     size: real("size").notNull().default(1),
+    invisible: integer("invisible", { mode: "boolean" }).notNull().default(false),
     imageKey: text("image_key").references(() => mediaAssets.key, {
       onDelete: "set null",
     }),
@@ -235,6 +237,23 @@ export const notes = sqliteTable(
     updatedAt: updatedAt(),
   },
   (t) => [index("notes_user_idx").on(t.userId)],
+);
+
+export const noteShares = sqliteTable(
+  "note_shares",
+  {
+    noteId: integer("note_id")
+      .notNull()
+      .references(() => notes.id, { onDelete: "cascade" }),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.noteId, t.userId] }),
+    index("note_shares_user_idx").on(t.userId),
+  ],
 );
 
 export type UserRow = typeof users.$inferSelect;

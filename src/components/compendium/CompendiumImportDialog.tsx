@@ -1,12 +1,14 @@
 import { useRef, useState } from "react";
-import { FileJson, Loader2, Upload } from "lucide-react";
+import { Download, FileJson, Loader2, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { trpcErrorMessage } from "@/lib/api";
 import {
+  buildCompendiumJsonSchemas,
   COMPENDIUM_IMPORT_MAX_BYTES,
   validateCompendiumImport,
   type CompendiumImportIssue,
 } from "@contracts/compendium";
+import { compendiumTypes, type CompendiumType } from "@contracts/constants";
 import { useCompendiumMutations } from "@/hooks/useCompendium";
 import { Button } from "@/components/ui/button";
 import {
@@ -46,6 +48,7 @@ function CompendiumImportBody({
   onOpenChange: (open: boolean) => void;
 }) {
   const [fileName, setFileName] = useState<string | null>(null);
+  const [schemaType, setSchemaType] = useState<CompendiumType>("monster");
   const [json, setJson] = useState<string | null>(null);
   const [issues, setIssues] = useState<CompendiumImportIssue[]>([]);
   const [cardCount, setCardCount] = useState(0);
@@ -92,6 +95,16 @@ function CompendiumImportBody({
     }
   };
 
+  const downloadSchema = () => {
+    const json = buildCompendiumJsonSchemas()[schemaType];
+    const url = URL.createObjectURL(new Blob([json], { type: "application/schema+json" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${schemaType}.schema.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
   const canImport =
     json !== null && issues.length === 0 && !importJson.isPending && importedCount === null;
 
@@ -106,6 +119,20 @@ function CompendiumImportBody({
         </DialogHeader>
 
         <div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2 rounded-md border p-2">
+            <span className="text-xs text-muted-foreground">JSON Schema:</span>
+            <select
+              aria-label="Тип схемы компедиума"
+              className="h-7 rounded-md border bg-background px-2 text-xs"
+              value={schemaType}
+              onChange={(event) => setSchemaType(event.target.value as CompendiumType)}
+            >
+              {compendiumTypes.map((type) => <option key={type} value={type}>{type}</option>)}
+            </select>
+            <Button type="button" size="sm" variant="outline" className="ui-hover h-7 text-xs" onClick={downloadSchema}>
+              <Download className="size-3" /> Скачать схему
+            </Button>
+          </div>
           <input
             ref={fileInputRef}
             type="file"

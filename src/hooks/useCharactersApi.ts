@@ -1,4 +1,5 @@
 import { api, type MutationHook, type QueryHook } from "@/lib/api";
+import type { UserDto } from "@contracts/auth";
 import { queryClient } from "@/providers/trpc";
 import type {
   CharacterCreateInput,
@@ -12,6 +13,7 @@ import type {
   NoteIdInput,
   NoteSummaryDto,
   NoteUpdateInput,
+  NoteSharesInput,
 } from "@contracts/notes";
 
 /**
@@ -37,6 +39,8 @@ export interface CharactersNotesApiExtension {
     // title/content имеют серверные дефолты, поэтому на входе опциональны.
     create: MutationHook<{ title?: string; content?: string }, NoteDto>;
     update: MutationHook<NoteUpdateInput, NoteDto>;
+    shareCandidates: QueryHook<undefined, UserDto[]>;
+    setShares: MutationHook<NoteSharesInput, NoteDto>;
     remove: MutationHook<NoteIdInput, { removedId: number }>;
   };
 }
