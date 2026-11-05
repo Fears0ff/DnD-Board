@@ -16,10 +16,40 @@ export const mediaKeySchema = z
   .regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*$/)
   .refine((v) => !v.includes(".."), "Invalid storage key");
 
+/* -------------------------------- campaigns -------------------------------- */
+
+export const campaignCreateInputSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+});
+export type CampaignCreateInput = z.infer<typeof campaignCreateInputSchema>;
+
+export const campaignRenameInputSchema = z.object({
+  id: idSchema,
+  name: z.string().trim().min(1).max(80),
+});
+export type CampaignRenameInput = z.infer<typeof campaignRenameInputSchema>;
+
+export const campaignIdInputSchema = z.object({ id: idSchema });
+export type CampaignIdInput = z.infer<typeof campaignIdInputSchema>;
+
+/** null clears the player-visible campaign and its active board. */
+export const campaignSetActiveInputSchema = z.object({ id: idSchema.nullable() });
+export type CampaignSetActiveInput = z.infer<typeof campaignSetActiveInputSchema>;
+
+export interface CampaignDto {
+  id: number;
+  name: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /* ---------------------------------- boards --------------------------------- */
 
 export const boardCreateInputSchema = z.object({
   name: z.string().trim().min(1).max(80),
+  /** Defaults to the active campaign for backwards-compatible API clients. */
+  campaignId: idSchema.optional(),
   cellSize: z.number().int().min(4).max(1024).optional(),
   gridWidth: z.number().int().min(1).max(500).optional(),
   gridHeight: z.number().int().min(1).max(500).optional(),
@@ -44,6 +74,7 @@ export type BoardIdInput = z.infer<typeof boardIdInputSchema>;
 
 export interface BoardDto {
   id: number;
+  campaignId: number;
   name: string;
   backgroundKey: string | null;
   cellSize: number;
@@ -173,6 +204,8 @@ export type InitiativeSetInput = z.infer<typeof initiativeSetInputSchema>;
 export const gameStateInputSchema = z
   .object({
     boardId: idSchema.optional(),
+    /** Master-only viewed campaign; players always use the active campaign. */
+    campaignId: idSchema.optional(),
   })
   .nullish()
   // Legacy clients and thin HTTP helpers may encode "no input" as null.
@@ -182,6 +215,12 @@ export type GameStateInput = z.infer<typeof gameStateInputSchema>;
 export interface GameStateDto {
   me: UserDto;
   revision: number;
+  campaigns: CampaignDto[];
+  /** Globally player-visible campaign; null intentionally shows a placeholder. */
+  activeCampaign: CampaignDto | null;
+  /** Campaign whose boards are returned and whose board the requester views. */
+  viewedCampaign: CampaignDto | null;
+  /** Boards of viewedCampaign (activeCampaign for players). */
   boards: BoardDto[];
   /** The globally player-visible board. */
   activeBoard: BoardDto | null;

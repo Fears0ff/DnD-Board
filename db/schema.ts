@@ -77,10 +77,32 @@ export const mediaAssets = sqliteTable(
   ],
 );
 
+export const campaigns = sqliteTable(
+  "campaigns",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    name: text("name").notNull(),
+    isActive: integer("is_active", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex("campaigns_single_active")
+      .on(t.isActive)
+      .where(sql`${t.isActive} = 1`),
+  ],
+);
+
 export const boards = sqliteTable(
   "boards",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
+    campaignId: integer("campaign_id")
+      .notNull()
+      .default(1)
+      .references(() => campaigns.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     backgroundKey: text("background_key").references(
       () => mediaAssets.key,
@@ -98,7 +120,8 @@ export const boards = sqliteTable(
     updatedAt: updatedAt(),
   },
   (t) => [
-    // Invariant: at most one active board.
+    index("boards_campaign_idx").on(t.campaignId),
+    // Invariant: at most one globally active board; its campaign must be active.
     uniqueIndex("boards_single_active")
       .on(t.isActive)
       .where(sql`${t.isActive} = 1`),
@@ -119,6 +142,9 @@ export const characters = sqliteTable(
     name: text("name").notNull(),
     // JSON character sheet including its sheetVersion.
     data: text("data").notNull(),
+    portraitKey: text("portrait_key").references(() => mediaAssets.key, {
+      onDelete: "set null",
+    }),
     // Optimistic concurrency version.
     version: integer("version").notNull().default(1),
     createdAt: createdAt(),
@@ -257,6 +283,7 @@ export const noteShares = sqliteTable(
 );
 
 export type UserRow = typeof users.$inferSelect;
+export type CampaignRow = typeof campaigns.$inferSelect;
 export type BoardRow = typeof boards.$inferSelect;
 export type TokenRow = typeof tokens.$inferSelect;
 export type AppMetaRow = typeof appMeta.$inferSelect;

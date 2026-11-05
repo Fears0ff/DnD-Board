@@ -2,20 +2,64 @@ import { asc, eq } from "drizzle-orm";
 import type { DbHandle } from "../../db/connection";
 import {
   boards,
+  campaigns,
   tokens,
   type BoardRow,
+  type CampaignRow,
   type TokenRow,
 } from "../../db/schema";
 import type { InitiativeEntry } from "../../contracts/game";
-import type { BoardDto, TokenDto } from "../../contracts/game";
+import type { BoardDto, CampaignDto, TokenDto } from "../../contracts/game";
 
 type Db = DbHandle;
+
+/* -------------------------------- campaigns -------------------------------- */
+
+export function toCampaignDto(row: CampaignRow): CampaignDto {
+  return {
+    id: row.id,
+    name: row.name,
+    isActive: row.isActive,
+    createdAt: new Date(row.createdAt).toISOString(),
+    updatedAt: new Date(row.updatedAt).toISOString(),
+  };
+}
+
+export function listCampaigns(db: Db): CampaignRow[] {
+  return db.select().from(campaigns).orderBy(asc(campaigns.id)).all();
+}
+
+export function findCampaignById(db: Db, id: number): CampaignRow | undefined {
+  return db.select().from(campaigns).where(eq(campaigns.id, id)).get();
+}
+
+export function findActiveCampaign(db: Db): CampaignRow | undefined {
+  return db.select().from(campaigns).where(eq(campaigns.isActive, true)).get();
+}
+
+export function insertCampaign(db: Db, name: string, isActive: boolean): CampaignRow {
+  const now = Date.now();
+  return db.insert(campaigns).values({ name, isActive, createdAt: now, updatedAt: now }).returning().get();
+}
+
+export function renameCampaignRow(db: Db, id: number, name: string): CampaignRow | undefined {
+  return db.update(campaigns).set({ name, updatedAt: Date.now() }).where(eq(campaigns.id, id)).returning().get();
+}
+
+export function setCampaignActiveFlag(db: Db, id: number, isActive: boolean): void {
+  db.update(campaigns).set({ isActive, updatedAt: Date.now() }).where(eq(campaigns.id, id)).run();
+}
+
+export function deleteCampaignRow(db: Db, id: number): void {
+  db.delete(campaigns).where(eq(campaigns.id, id)).run();
+}
 
 /* ---------------------------------- boards --------------------------------- */
 
 export function toBoardDto(row: BoardRow): BoardDto {
   return {
     id: row.id,
+    campaignId: row.campaignId,
     name: row.name,
     backgroundKey: row.backgroundKey,
     cellSize: row.cellSize,
@@ -72,6 +116,10 @@ export function listBoards(db: Db): BoardRow[] {
   return db.select().from(boards).orderBy(asc(boards.id)).all();
 }
 
+export function listBoardsByCampaign(db: Db, campaignId: number): BoardRow[] {
+  return db.select().from(boards).where(eq(boards.campaignId, campaignId)).orderBy(asc(boards.id)).all();
+}
+
 export function findBoardById(db: Db, id: number): BoardRow | undefined {
   return db.select().from(boards).where(eq(boards.id, id)).get();
 }
@@ -80,13 +128,16 @@ export function findActiveBoard(db: Db): BoardRow | undefined {
   return db.select().from(boards).where(eq(boards.isActive, true)).get();
 }
 
-export function countBoards(db: Db): number {
-  return db.select({ id: boards.id }).from(boards).all().length;
+export function countBoards(db: Db, campaignId?: number): number {
+  return campaignId === undefined
+    ? db.select({ id: boards.id }).from(boards).all().length
+    : db.select({ id: boards.id }).from(boards).where(eq(boards.campaignId, campaignId)).all().length;
 }
 
 export function insertBoard(
   db: Db,
   values: {
+    campaignId: number;
     name: string;
     cellSize: number;
     gridWidth: number;
