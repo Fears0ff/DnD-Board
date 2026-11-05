@@ -2,6 +2,7 @@ import { and, eq, lt, sql } from "drizzle-orm";
 import type { DbHandle } from "../../db/connection";
 import {
   boards,
+  characters,
   compendiumItems,
   mediaAssets,
   tokens,
@@ -45,8 +46,8 @@ export function insertMediaAsset(
 
 /**
  * Number of live references to a media key. References exist ONLY in the
- * explicit columns boards.background_key, tokens.image_key and
- * compendium_items.image_key (plan §8.3).
+ * explicit columns boards.background_key, tokens.image_key,
+ * compendium_items.image_key and characters.portrait_key.
  */
 export function countMediaReferences(db: Db, key: string): number {
   const viaBoards = db
@@ -64,7 +65,12 @@ export function countMediaReferences(db: Db, key: string): number {
     .from(compendiumItems)
     .where(eq(compendiumItems.imageKey, key))
     .all().length;
-  return viaBoards + viaTokens + viaCompendium;
+  const viaCharacters = db
+    .select({ id: characters.id })
+    .from(characters)
+    .where(eq(characters.portraitKey, key))
+    .all().length;
+  return viaBoards + viaTokens + viaCompendium + viaCharacters;
 }
 
 // Raw SQL is used for the NOT EXISTS anti-joins: Drizzle has no type-safe
@@ -73,6 +79,7 @@ const unreferencedSql = (keyColumn: typeof mediaAssets.key) => sql`
   NOT EXISTS (SELECT 1 FROM ${boards} WHERE ${boards.backgroundKey} = ${keyColumn})
   AND NOT EXISTS (SELECT 1 FROM ${tokens} WHERE ${tokens.imageKey} = ${keyColumn})
   AND NOT EXISTS (SELECT 1 FROM ${compendiumItems} WHERE ${compendiumItems.imageKey} = ${keyColumn})
+  AND NOT EXISTS (SELECT 1 FROM ${characters} WHERE ${characters.portraitKey} = ${keyColumn})
 `;
 
 /** Assets with no live references created before cutoffMs (orphan cleanup). */

@@ -36,6 +36,7 @@ export function toCharacterSummaryDto(row: CharacterRow): CharacterSummaryDto {
     ownerId: row.ownerId,
     name: row.name,
     version: row.version,
+    portraitKey: row.portraitKey ?? null,
     createdAt: new Date(row.createdAt).toISOString(),
     updatedAt: new Date(row.updatedAt).toISOString(),
   };
@@ -68,7 +69,13 @@ export function findCharacterById(db: Db, id: number): CharacterRow | undefined 
 
 export function insertCharacter(
   db: Db,
-  values: { ownerId: number; name: string; data: CharacterSheetData },
+  values: {
+    ownerId: number;
+    name: string;
+    data: CharacterSheetData;
+    /** Optional media_assets key (characters.portrait_key FK). */
+    portraitKey?: string | null;
+  },
 ): CharacterRow {
   const now = Date.now();
   return db
@@ -77,6 +84,7 @@ export function insertCharacter(
       ownerId: values.ownerId,
       name: values.name,
       data: JSON.stringify(values.data),
+      portraitKey: values.portraitKey ?? null,
       createdAt: now,
       updatedAt: now,
     })
@@ -93,12 +101,15 @@ export function updateCharacterRow(
   db: Db,
   id: number,
   expectedVersion: number,
-  patch: { name?: string; data?: string },
+  patch: { name?: string; data?: string; portraitKey?: string | null },
 ): CharacterRow | undefined {
   return db
     .update(characters)
     .set({
-      ...patch,
+      ...(patch.name !== undefined ? { name: patch.name } : {}),
+      ...(patch.data !== undefined ? { data: patch.data } : {}),
+      // Nullable FK: explicit null clears the portrait.
+      ...(patch.portraitKey !== undefined ? { portraitKey: patch.portraitKey } : {}),
       version: sql`${characters.version} + 1`,
       updatedAt: Date.now(),
     })

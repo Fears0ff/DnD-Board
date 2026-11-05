@@ -389,6 +389,72 @@ export const vitalsSchema = vitalsObjectSchema.default({
 });
 export type SheetVitals = z.infer<typeof vitalsSchema>;
 
+/* --------------------------- import extensions ----------------------------- */
+
+/**
+ * Recursive JSON value validator for preserved third-party data. Stored data
+ * must remain JSON-serializable so the sheet column never gets non-JSON
+ * content; `unknown` importer output is re-validated through this schema.
+ */
+export const jsonValueSchema: z.ZodType<unknown> = z.lazy(() =>
+  z.union([
+    z.string(),
+    z.number(),
+    z.boolean(),
+    z.null(),
+    z.array(jsonValueSchema),
+    z.record(z.string(), jsonValueSchema),
+  ]),
+);
+
+const jsonObjectSchema = z.record(z.string(), jsonValueSchema);
+
+/**
+ * Typed extension bucket for data imported from "Long Story Short" that the
+ * native sheet cannot represent (resources, bonus overrides, LSS app
+ * settings, outer spells state, unrecognized fields). Kept as JSON data —
+ * NOT flattened into notes — so a future version can map more of it. Avatar
+ * payloads (bytes/URLs) are deliberately NOT preserved here.
+ */
+export const longStoryShortExtensionSchema = z.object({
+  source: z.literal("long-story-short").default("long-story-short"),
+  /** ISO-8601 import timestamp. */
+  importedAt: text(40).default(""),
+  edition: text(20).default(""),
+  sheetEdition: text(20).default(""),
+  /** LSS dice/resource trackers (inner `resources`), verbatim JSON. */
+  resources: jsonValueSchema.optional(),
+  /** Manual bonus overrides (inner `bonusesSkills`/`bonusesStats`/`bonuses`). */
+  bonusesSkills: jsonValueSchema.optional(),
+  bonusesStats: jsonValueSchema.optional(),
+  bonuses: jsonValueSchema.optional(),
+  /** LSS proficiency flags (inner `prof`), verbatim JSON. */
+  proficiencies: jsonValueSchema.optional(),
+  /** Attunement list when present (inner `attunementsList`). */
+  attunements: jsonValueSchema.optional(),
+  /** LSS spellbook state that the sheet does not model (inner+outer spells). */
+  spells: jsonValueSchema.optional(),
+  /** LSS UI/layout settings (outer `disabledBlocks`, link access, etc.). */
+  settings: jsonValueSchema.optional(),
+  /** ProseMirror text blocks with no sheet counterpart, keyed by LSS key. */
+  unmappedText: jsonObjectSchema.default({}),
+  /** Unrecognized inner `data` keys, preserved verbatim for future support. */
+  unknownFields: jsonObjectSchema.default({}),
+  /** Unrecognized outer export keys (minus `data`/collab state), verbatim. */
+  unknownOuterFields: jsonObjectSchema.default({}),
+});
+export type LongStoryShortExtension = z.infer<typeof longStoryShortExtensionSchema>;
+
+/**
+ * Extensible per-source extension sections. New importers add a typed key
+ * here instead of overloading free-text fields.
+ */
+const extensionsObjectSchema = z.object({
+  longStoryShort: longStoryShortExtensionSchema.optional(),
+});
+export const sheetExtensionsSchema = extensionsObjectSchema.default({});
+export type SheetExtensions = z.infer<typeof sheetExtensionsSchema>;
+
 /* ------------------------------ whole sheet -------------------------------- */
 
 export const characterSheetDataSchema = z.object({
@@ -402,6 +468,7 @@ export const characterSheetDataSchema = z.object({
   attacks: attacksSchema,
   traits: traitsSchema,
   vitals: vitalsSchema,
+  extensions: sheetExtensionsSchema,
 });
 export type CharacterSheetData = z.infer<typeof characterSheetDataSchema>;
 
@@ -426,6 +493,7 @@ export const characterSheetPatchSchema = z.object({
   attacks: attacksObjectSchema.partial().optional(),
   traits: traitsObjectSchema.partial().optional(),
   vitals: vitalsObjectSchema.partial().optional(),
+  extensions: extensionsObjectSchema.partial().optional(),
 });
 export type CharacterSheetPatch = z.infer<typeof characterSheetPatchSchema>;
 
@@ -444,6 +512,7 @@ export function mergeSheetData(
     attacks: { ...base.attacks, ...patch.attacks },
     traits: { ...base.traits, ...patch.traits },
     vitals: { ...base.vitals, ...patch.vitals },
+    extensions: { ...base.extensions, ...patch.extensions },
   });
 }
 
@@ -484,6 +553,11 @@ export interface CharacterSummaryDto {
   ownerId: number;
   name: string;
   version: number;
+  /**
+   * Portrait media key (FK media_assets), null when none. Render via
+   * GET /api/board-image?key=...; never an external URL.
+   */
+  portraitKey: string | null;
   /** ISO-8601 timestamps. */
   createdAt: string;
   updatedAt: string;
@@ -492,6 +566,21 @@ export interface CharacterSummaryDto {
 export interface CharacterDto extends CharacterSummaryDto {
   data: CharacterSheetData;
 }
+
+/* ------------------------- Long Story Short import ------------------------- */
+
+/** Hard cap on the pasted/loaded export text (samples are ~100–200 KB). */
+export const LSS_IMPORT_MAX_CHARS = 8 * 1024 * 1024;
+
+/**
+ * `characters.importLss`: raw text of a Long Story Short export file
+ * (`.json`, outer object with `data` as a nested JSON string). Always
+ * creates a NEW sheet owned by the caller; the name comes from the export.
+ */
+export const characterImportLssInputSchema = z.object({
+  jsonText: z.string().min(2).max(LSS_IMPORT_MAX_CHARS),
+});
+export type CharacterImportLssInput = z.infer<typeof characterImportLssInputSchema>;
 
 /* --------------------------- optimistic concurrency ------------------------ */
 

@@ -22,7 +22,7 @@ export type ImageMime = (typeof imageMimes)[number];
  * the master may upload for any purpose, players only for their own
  * `item`/`character` compendium cards (purpose "compendium" + compendiumId).
  */
-export const mediaPurposes = ["board", "token", "compendium"] as const;
+export const mediaPurposes = ["board", "token", "compendium", "characterSheet"] as const;
 export type MediaPurpose = (typeof mediaPurposes)[number];
 
 // base64 inflates by 4/3; cap the encoded length so decoding never starts on

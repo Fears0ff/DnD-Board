@@ -2,12 +2,14 @@ import { authedProcedure, createRouter } from "../middleware";
 import {
   characterCreateInputSchema,
   characterIdInputSchema,
+  characterImportLssInputSchema,
   characterUpdateInputSchema,
 } from "../../contracts/characters";
 import { getDb } from "../../db/connection";
 import {
   createCharacter,
   getCharacter,
+  importLssCharacter,
   listCharacters,
   removeCharacter,
   updateCharacter,
@@ -38,6 +40,12 @@ export const charactersRouter = createRouter({
   update: authedProcedure
     .input(characterUpdateInputSchema)
     .mutation(({ ctx, input }) => updateCharacter(getDb(), ctx.user, input)),
+
+  // Импорт выгрузки Long Story Short: всегда создаёт НОВЫЙ лист вызывающего.
+  // Ошибки формата приходят как BAD_REQUEST с сообщением на русском.
+  importLss: authedProcedure
+    .input(characterImportLssInputSchema)
+    .mutation(({ ctx, input }) => importLssCharacter(getDb(), ctx.user, input.jsonText)),
 
   remove: authedProcedure
     .input(characterIdInputSchema)
