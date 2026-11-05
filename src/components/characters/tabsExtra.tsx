@@ -520,3 +520,69 @@ export function VitalsTab({ sheet, patch }: SheetTabProps) {
     </div>
   );
 }
+
+/* -------------------- Вкладка 8: импорт Long Story Short -------------------- */
+
+import type { LongStoryShortExtension } from "@contracts/characters";
+
+/** Подписи секций расширения LSS (read-only просмотр сохранённых данных). */
+const LSS_SECTION_LABELS: [keyof LongStoryShortExtension, string][] = [
+  ["resources", "Ресурсы и кости"],
+  ["bonusesSkills", "Бонусы навыков"],
+  ["bonusesStats", "Бонусы характеристик"],
+  ["bonuses", "Прочие бонусы"],
+  ["proficiencies", "Флаги владений LSS"],
+  ["attunements", "Настройка предметов (attunement)"],
+  ["spells", "Книга заклинаний LSS"],
+  ["settings", "Настройки листа LSS"],
+  ["unmappedText", "Текстовые блоки без аналога"],
+  ["unknownFields", "Нераспознанные поля листа"],
+  ["unknownOuterFields", "Нераспознанные поля выгрузки"],
+];
+
+function isEmptyJson(v: unknown): boolean {
+  if (v === undefined || v === null) return true;
+  if (typeof v === "object") return Object.keys(v as object).length === 0;
+  return false;
+}
+
+/**
+ * Только чтение: данные, сохранённые при импорте из Long Story Short, которые
+ * лист пока не поддерживает. Не редактируется и не дублируется в заметки.
+ */
+export function LssExtensionTab({ sheet }: Pick<SheetTabProps, "patch" | "sheet">) {
+  const ext = sheet.extensions?.longStoryShort;
+  if (!ext) {
+    return (
+      <p className="py-6 text-center text-xs text-muted-foreground">
+        Этот лист не импортирован из Long Story Short.
+      </p>
+    );
+  }
+  const sections = LSS_SECTION_LABELS.filter(([key]) => !isEmptyJson(ext[key]));
+  return (
+    <div className="space-y-3">
+      <p className="text-[10px] text-muted-foreground">
+        Импортировано из Long Story Short
+        {ext.importedAt ? ` (${new Date(ext.importedAt).toLocaleString("ru-RU")})` : ""}
+        {ext.edition ? ` · редакция ${ext.edition}` : ""}
+        {ext.sheetEdition ? ` · лист ${ext.sheetEdition}` : ""}. Данные ниже
+        сохранены как есть и доступны только для чтения.
+      </p>
+      {sections.length === 0 ? (
+        <p className="text-xs text-muted-foreground">
+          Дополнительных данных нет — всё содержимое файла сопоставлено полям листа.
+        </p>
+      ) : (
+        sections.map(([key, label]) => (
+          <div key={key}>
+            <h3 className="mb-1 text-xs font-semibold">{label}</h3>
+            <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded border border-border bg-muted/40 p-2 text-[10px] leading-relaxed">
+              {JSON.stringify(ext[key], null, 2)}
+            </pre>
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
