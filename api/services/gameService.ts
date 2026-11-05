@@ -1,6 +1,6 @@
 import { TRPCError } from "@trpc/server";
 import type { AppDatabase, DbHandle } from "../../db/connection";
-import type { BoardRow, TokenRow, UserRow } from "../../db/schema";
+import type { BoardRow, CampaignRow, TokenRow, UserRow } from "../../db/schema";
 import { monsterCardDataSchema } from "../../contracts/compendium";
 import { parseSheetJson } from "../repositories/characters";
 import {
@@ -11,6 +11,8 @@ import {
 import type {
   BoardCreateInput,
   BoardDto,
+  CampaignCreateInput,
+  CampaignDto,
   GameStateDto,
   GameStateInput,
   InitiativeEntry,
@@ -26,22 +28,31 @@ import { deleteAssetIfUnreferenced } from "./mediaService";
 import {
   countBoards,
   deleteBoardRow,
+  deleteCampaignRow,
   deleteTokenRow,
   deleteTokensByBoard,
   findActiveBoard,
+  findActiveCampaign,
   findBoardById,
+  findCampaignById,
   findTokenById,
   insertBoard,
+  insertCampaign,
   insertToken,
   listBoards,
+  listBoardsByCampaign,
+  listCampaigns,
   listTokensByBoard,
   parseInitiative,
   renameBoardRow,
+  renameCampaignRow,
   setBoardActiveFlag,
+  setCampaignActiveFlag,
   setBoardBackgroundKey,
   setBoardGridSize,
   setBoardInitiative,
   toBoardDto,
+  toCampaignDto,
   toTokenDto,
   updateTokenRow,
 } from "../repositories/game";
@@ -167,6 +178,14 @@ function requireBoard(db: DbHandle, id: number): BoardRow {
   return board;
 }
 
+function requireCampaign(db: DbHandle, id: number): CampaignRow {
+  const campaign = findCampaignById(db, id);
+  if (!campaign) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
+  }
+  return campaign;
+}
+
 function requireActiveBoard(db: DbHandle): BoardRow {
   const board = findActiveBoard(db);
   if (!board) {
@@ -183,28 +202,45 @@ export function getGameState(
   user: UserRow,
   input?: GameStateInput,
 ): GameStateDto {
+  const isMaster = user.gameRole === "master";
+  const allCampaigns = listCampaigns(db);
+  const activeCampaign = allCampaigns.find((campaign) => campaign.isActive) ?? null;
   const allBoards = listBoards(db);
-  // The globally player-visible board, independent of any requested view.
-  const active = allBoards.find((b) => b.isActive) ?? null;
+  // A board is player-visible only while both it and its campaign are active.
+  const globallyActiveBoard = allBoards.find((board) => board.isActive) ?? null;
+  const active = globallyActiveBoard?.campaignId === activeCampaign?.id
+    ? globallyActiveBoard
+    : null;
 
-  // Only the master may view a board other than the active one.
+  let viewedCampaign = activeCampaign;
   let viewed = active;
-  if (user.gameRole === "master" && input?.boardId !== undefined) {
-    const requested = findBoardById(db, input.boardId);
-    if (!requested) {
-      throw new TRPCError({ code: "NOT_FOUND", message: "Board not found" });
+  if (isMaster) {
+    const requestedBoard = input?.boardId !== undefined
+      ? requireBoard(db, input.boardId)
+      : undefined;
+    const requestedCampaignId = input?.campaignId ?? requestedBoard?.campaignId;
+    viewedCampaign = requestedCampaignId !== undefined
+      ? requireCampaign(db, requestedCampaignId)
+      : activeCampaign ?? allCampaigns[0] ?? null;
+    if (requestedBoard) {
+      if (viewedCampaign?.id !== requestedBoard.campaignId) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Board is outside the viewed campaign" });
+      }
+      viewed = requestedBoard;
+    } else {
+      const campaignBoards = viewedCampaign ? listBoardsByCampaign(db, viewedCampaign.id) : [];
+      viewed = active?.campaignId === viewedCampaign?.id
+        ? active
+        : campaignBoards[0] ?? null;
     }
-    viewed = requested;
   }
 
-  const isMaster = user.gameRole === "master";
+  const visibleBoards = viewedCampaign ? listBoardsByCampaign(db, viewedCampaign.id) : [];
+  if (!isMaster) viewed = active;
   const allTokenRows = viewed ? listTokensByBoard(db, viewed.id) : [];
-  // Invisibility is an authorization boundary for the token itself, not its
-  // manually entered initiative: hidden token DTOs are omitted, but the
-  // initiative list intentionally retains all entries.
+  // Hidden token DTOs are omitted; manual initiative deliberately retains them.
   const tokenRows = isMaster ? allTokenRows : allTokenRows.filter((row) => !row.invisible);
   const tokenDtos = toResolvedTokenDtos(db, tokenRows).map((dto, index) => {
-    // HP is private: the master sees everything, a player only their own tokens.
     if (!isMaster && tokenRows[index].ownerId !== user.id) {
       dto.hp = null;
       dto.maxHp = null;
@@ -214,12 +250,98 @@ export function getGameState(
   return {
     me: toUserDto(user),
     revision: getGameRevision(db),
-    boards: allBoards.map(toBoardDto),
+    campaigns: allCampaigns.map(toCampaignDto),
+    activeCampaign: activeCampaign ? toCampaignDto(activeCampaign) : null,
+    viewedCampaign: viewedCampaign ? toCampaignDto(viewedCampaign) : null,
+    boards: visibleBoards.map(toBoardDto),
     activeBoard: active ? toBoardDto(active) : null,
     viewedBoard: viewed ? toBoardDto(viewed) : null,
     tokens: tokenDtos,
     initiative: viewed ? parseInitiative(viewed.initiative) : [],
   };
+}
+
+/* -------------------------------- campaigns -------------------------------- */
+
+export function createCampaign(
+  db: AppDatabase,
+  input: CampaignCreateInput,
+): MutationResult<CampaignDto> {
+  const result = db.transaction((tx) => {
+    const isActive = !findActiveCampaign(tx);
+    const row = insertCampaign(tx, input.name, isActive);
+    return { value: toCampaignDto(row), revision: bumpGameRevision(tx) };
+  });
+  publishGameChanged(result.revision);
+  return result;
+}
+
+export function renameCampaign(
+  db: AppDatabase,
+  id: number,
+  name: string,
+): MutationResult<CampaignDto> {
+  const result = db.transaction((tx) => {
+    requireCampaign(tx, id);
+    const row = renameCampaignRow(tx, id, name);
+    if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Campaign not found" });
+    return { value: toCampaignDto(row), revision: bumpGameRevision(tx) };
+  });
+  publishGameChanged(result.revision);
+  return result;
+}
+
+/** Activating a campaign selects its first board; null hides the game from players. */
+export function setActiveCampaign(
+  db: AppDatabase,
+  id: number | null,
+): MutationResult<CampaignDto | null> {
+  const result = db.transaction((tx) => {
+    const target = id === null ? null : requireCampaign(tx, id);
+    const currentCampaign = findActiveCampaign(tx);
+    const currentBoard = findActiveBoard(tx);
+    if (currentBoard) setBoardActiveFlag(tx, currentBoard.id, false);
+    if (currentCampaign) setCampaignActiveFlag(tx, currentCampaign.id, false);
+    if (target) {
+      setCampaignActiveFlag(tx, target.id, true);
+      const firstBoard = listBoardsByCampaign(tx, target.id)[0];
+      if (firstBoard) setBoardActiveFlag(tx, firstBoard.id, true);
+    }
+    return {
+      value: target ? toCampaignDto(requireCampaign(tx, target.id)) : null,
+      revision: bumpGameRevision(tx),
+    };
+  });
+  publishGameChanged(result.revision);
+  return result;
+}
+
+export async function removeCampaign(
+  db: AppDatabase,
+  id: number,
+): Promise<MutationResult<{ removedId: number }>> {
+  let replacedKeys: (string | null)[] = [];
+  const result = db.transaction((tx) => {
+    const campaign = requireCampaign(tx, id);
+    const campaignBoards = listBoardsByCampaign(tx, id);
+    replacedKeys = campaignBoards.flatMap((board) => [
+      board.backgroundKey,
+      ...listTokensByBoard(tx, board.id).map((token) => token.imageKey),
+    ]);
+    deleteCampaignRow(tx, id);
+    if (campaign.isActive) {
+      const next = listCampaigns(tx)[0];
+      if (next) {
+        setCampaignActiveFlag(tx, next.id, true);
+        const firstBoard = listBoardsByCampaign(tx, next.id)[0];
+        if (firstBoard) setBoardActiveFlag(tx, firstBoard.id, true);
+      }
+    }
+    return { value: { removedId: id }, revision: bumpGameRevision(tx) };
+  });
+  publishGameChanged(result.revision);
+  await cleanupReplacedAssets(db, replacedKeys);
+  return result;
 }
 
 /* ---------------------------------- boards --------------------------------- */
@@ -230,9 +352,16 @@ export function createBoard(
 ): MutationResult<BoardDto> {
   const result = db.transaction((tx) => {
     const t = tx;
-    // The first board ever created becomes active automatically.
-    const isActive = countBoards(t) === 0;
+    const activeCampaign = findActiveCampaign(t);
+    const campaignId = input.campaignId ?? activeCampaign?.id;
+    if (campaignId === undefined) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "No campaign selected for the board" });
+    }
+    requireCampaign(t, campaignId);
+    // The first board of the player-visible campaign becomes active automatically.
+    const isActive = activeCampaign?.id === campaignId && countBoards(t, campaignId) === 0;
     const row = insertBoard(t, {
+      campaignId,
       name: input.name,
       cellSize: input.cellSize ?? 64,
       gridWidth: input.gridWidth ?? 30,
@@ -304,8 +433,8 @@ export async function removeBoard(
     ];
     deleteBoardRow(t, id);
     if (board.isActive) {
-      // Never leave the space without an active board if others remain.
-      const next = listBoards(t)[0];
+      // Promote only inside the same campaign; never expose another campaign.
+      const next = listBoardsByCampaign(t, board.campaignId)[0];
       if (next) setBoardActiveFlag(t, next.id, true);
     }
     return { value: { removedId: id }, revision: bumpGameRevision(t) };
@@ -346,9 +475,12 @@ export function setActiveBoard(
   const result = db.transaction((tx) => {
     const t = tx;
     const board = requireBoard(t, id);
-    if (!board.isActive) {
+    if (!board.isActive || !requireCampaign(t, board.campaignId).isActive) {
       const current = findActiveBoard(t);
       if (current) setBoardActiveFlag(t, current.id, false);
+      const currentCampaign = findActiveCampaign(t);
+      if (currentCampaign) setCampaignActiveFlag(t, currentCampaign.id, false);
+      setCampaignActiveFlag(t, board.campaignId, true);
       setBoardActiveFlag(t, id, true);
     }
     const updated = requireBoard(t, id);
@@ -560,7 +692,7 @@ export function moveToken(
       });
     }
     const board = findBoardById(t, token.boardId);
-    if (!board?.isActive) {
+    if (!board?.isActive || !findCampaignById(t, board.campaignId)?.isActive) {
       throw new TRPCError({
         code: "BAD_REQUEST",
         message: "Token is not on the active board",

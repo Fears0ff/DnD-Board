@@ -6,6 +6,7 @@ import type { TokenKind } from "@contracts/types";
 
 export type {
   BoardDto,
+  CampaignDto,
   GameRole,
   GameStateDto,
   InitiativeEntry,

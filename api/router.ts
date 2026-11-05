@@ -3,6 +3,7 @@ import { authRouter } from "./routers/auth";
 import { usersRouter } from "./routers/users";
 import {
   boardsRouter,
+  campaignsRouter,
   gameRouter,
   initiativeRouter,
   tokensRouter,
@@ -18,6 +19,7 @@ export const appRouter = createRouter({
   users: usersRouter,
   game: gameRouter,
   boards: boardsRouter,
+  campaigns: campaignsRouter,
   tokens: tokensRouter,
   initiative: initiativeRouter,
   characters: charactersRouter,

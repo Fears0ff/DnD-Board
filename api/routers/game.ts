@@ -5,6 +5,10 @@ import {
   boardRenameInputSchema,
   boardSetBackgroundInputSchema,
   boardUpdateGridInputSchema,
+  campaignCreateInputSchema,
+  campaignIdInputSchema,
+  campaignRenameInputSchema,
+  campaignSetActiveInputSchema,
   gameStateInputSchema,
   initiativeSetInputSchema,
   tokenAddInputSchema,
@@ -19,12 +23,16 @@ import {
   adjustTokenHp,
   clearTokens,
   createBoard,
+  createCampaign,
   getGameState,
   moveToken,
   removeBoard,
+  removeCampaign,
   removeToken,
   renameBoard,
+  renameCampaign,
   setActiveBoard,
+  setActiveCampaign,
   setBoardBackground,
   setInitiative,
   updateBoardGrid,
@@ -36,6 +44,26 @@ export const gameRouter = createRouter({
   state: authedProcedure
     .input(gameStateInputSchema.optional())
     .query(({ ctx, input }) => getGameState(getDb(), ctx.user, input)),
+});
+
+/** Campaigns are managed by the master only. */
+export const campaignsRouter = createRouter({
+  create: masterProcedure.input(campaignCreateInputSchema).mutation(({ input }) => {
+    const { value, revision } = createCampaign(getDb(), input);
+    return { campaign: value, revision };
+  }),
+  rename: masterProcedure.input(campaignRenameInputSchema).mutation(({ input }) => {
+    const { value, revision } = renameCampaign(getDb(), input.id, input.name);
+    return { campaign: value, revision };
+  }),
+  setActive: masterProcedure.input(campaignSetActiveInputSchema).mutation(({ input }) => {
+    const { value, revision } = setActiveCampaign(getDb(), input.id);
+    return { campaign: value, revision };
+  }),
+  remove: masterProcedure.input(campaignIdInputSchema).mutation(async ({ input }) => {
+    const { value, revision } = await removeCampaign(getDb(), input.id);
+    return { ...value, revision };
+  }),
 });
 
 /** Boards are managed by the master only. */
