@@ -161,7 +161,7 @@ async function makePng(page: Page, color: string): Promise<Buffer> {
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("no 2d context");
     ctx.fillStyle = fill;
-    ctx.fillRect(0, 0, 16, 16);
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
     return canvas.toDataURL("image/png");
   }, color);
   return Buffer.from(dataUrl.split(",")[1], "base64");
@@ -228,9 +228,9 @@ function boardsMenuTrigger(page: Page) {
 async function clickBoardMenuItem(page: Page, name: string): Promise<void> {
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const item = page.getByRole("menuitem", { name });
-    if (!(await item.isVisible())) await boardsMenuTrigger(page).click();
-    await expect(item).toBeVisible();
     try {
+      if (!(await item.isVisible())) await boardsMenuTrigger(page).click();
+      await expect(item).toBeVisible({ timeout: 1_500 });
       await item.click({ timeout: 3_000 });
       return;
     } catch (error) {
