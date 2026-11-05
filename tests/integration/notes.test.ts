@@ -89,6 +89,29 @@ describe("notes router", () => {
     expect(own.content).toBe("# hidden");
   });
 
+  it("shares one note read-only with multiple recipients", async () => {
+    const owner = await registerUser("owner");
+    const first = await registerUser("first");
+    const second = await registerUser("second");
+    const outsider = await registerUser("outsider");
+    const ownerApi = await asUser(owner.cookie);
+    const note = await ownerApi.notes.create({ title: "Shared", content: "original" });
+    const shared = await ownerApi.notes.setShares({ id: note.id, userIds: [first.id, second.id, first.id] });
+    expect(shared.sharedWith.map((user) => user.id)).toEqual([first.id, second.id]);
+
+    for (const recipient of [first, second]) {
+      const api = await asUser(recipient.cookie);
+      expect((await api.notes.get({ id: note.id })).content).toBe("original");
+      expect((await api.notes.list()).map((item) => item.id)).toContain(note.id);
+      await expectTrpcError(api.notes.update({ id: note.id, expectedVersion: 1, content: "hack" }), "NOT_FOUND");
+      await expectTrpcError(api.notes.setShares({ id: note.id, userIds: [] }), "NOT_FOUND");
+      await expectTrpcError(api.notes.remove({ id: note.id }), "NOT_FOUND");
+    }
+    await expectTrpcError((await asUser(outsider.cookie)).notes.get({ id: note.id }), "NOT_FOUND");
+    await ownerApi.notes.setShares({ id: note.id, userIds: [second.id] });
+    await expectTrpcError((await asUser(first.cookie)).notes.get({ id: note.id }), "NOT_FOUND");
+  });
+
   it("updates with expectedVersion; stale writes get 409 + current entity", async () => {
     const player = await registerUser("hero");
     const caller = await asUser(player.cookie);

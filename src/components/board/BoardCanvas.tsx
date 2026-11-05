@@ -362,10 +362,12 @@ export function BoardCanvas(props: BoardCanvasProps) {
         }
         ctx.globalAlpha = 1;
         ctx.lineWidth = selected ? 3 / view.scale : 1.5 / view.scale;
-        ctx.strokeStyle = selected ? "#d7e6d2" : colors.ring;
+        ctx.strokeStyle = selected ? "#d7e6d2" : t.invisible ? "#e2ecdd" : colors.ring;
+        if (t.invisible) ctx.setLineDash([6 / view.scale, 4 / view.scale]);
         ctx.beginPath();
         ctx.arc(cx, cy, r, 0, Math.PI * 2);
         ctx.stroke();
+        ctx.setLineDash([]);
 
         // инициалы
         if (tokenImage?.status !== "ready") {
@@ -395,7 +397,8 @@ export function BoardCanvas(props: BoardCanvasProps) {
 
         // подпись под токеном
         ctx.font = `${fontLabel}px system-ui, sans-serif`;
-        const label = t.hp !== null && t.maxHp !== null && t.maxHp > 0 ? `${t.label} · ${t.hp}/${t.maxHp}` : t.label;
+        const hpLabel = t.hp !== null && t.maxHp !== null && t.maxHp > 0 ? `${t.label} · ${t.hp}/${t.maxHp}` : t.label;
+        const label = t.invisible ? `${hpLabel} · невидимый` : hpLabel;
         const ty = cy + r + fontLabel * 0.75;
         const metrics = ctx.measureText(label);
         const pad = 3 / view.scale;

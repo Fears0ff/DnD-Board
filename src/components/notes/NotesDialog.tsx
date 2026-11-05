@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { format } from "date-fns";
-import { AlertTriangle, CloudCheck, CloudUpload, Eye, Loader2, Pencil, Plus, Trash2 } from "lucide-react";
+import { AlertTriangle, CloudCheck, CloudUpload, Eye, Loader2, Pencil, Plus, Trash2, Users } from "lucide-react";
 import { toast } from "sonner";
 import { trpcErrorMessage } from "@/lib/api";
 import { invalidateNotes, notesApi } from "@/hooks/useCharactersApi";
@@ -57,6 +57,7 @@ export function NotesDialog({
     enabled: open,
     retry: 1,
     refetchOnWindowFocus: true,
+    refetchInterval: open ? 4000 : false,
   });
   const createMutation = notesApi.create.useMutation();
   const removeMutation = notesApi.remove.useMutation();
@@ -121,7 +122,7 @@ export function NotesDialog({
         <DialogHeader>
           <DialogTitle className="text-sm">Заметки</DialogTitle>
           <DialogDescription className="text-xs">
-            Личные Markdown-заметки. Никто другой их не видит — даже мастер.
+            Личные Markdown-заметки и заметки, которыми с вами поделились. Владелец управляет доступом.
           </DialogDescription>
         </DialogHeader>
 
@@ -170,10 +171,10 @@ export function NotesDialog({
                       >
                         <div className="truncate text-xs font-medium">{note.title}</div>
                         <div className="text-[10px] text-muted-foreground">
-                          {format(new Date(note.updatedAt), "dd.MM.yyyy HH:mm")}
+                          {note.isOwner ? format(new Date(note.updatedAt), "dd.MM.yyyy HH:mm") : `От: ${note.ownerName}`}
                         </div>
                       </button>
-                      <AlertDialog>
+                      {note.isOwner ? <AlertDialog>
                         <AlertDialogTrigger asChild>
                           <Button
                             type="button"
@@ -206,7 +207,7 @@ export function NotesDialog({
                             </AlertDialogAction>
                           </AlertDialogFooter>
                         </AlertDialogContent>
-                      </AlertDialog>
+                      </AlertDialog> : null}
                     </li>
                   ))}
                 </ul>
@@ -244,7 +245,7 @@ function NoteEditorLoader({
 }) {
   const noteQuery = notesApi.get.useQuery(
     { id: noteId },
-    { retry: 1, refetchOnWindowFocus: true },
+    { retry: 1, refetchOnWindowFocus: true, refetchInterval: 4000 },
   );
 
   if (noteQuery.data) {
@@ -291,7 +292,15 @@ function NoteEditor({
   const [title, setTitle] = useState(dto.title);
   const [content, setContent] = useState(dto.content);
   const [preview, setPreview] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
   const updateMutation = notesApi.update.useMutation();
+
+  const [receivedVersion, setReceivedVersion] = useState(dto.version);
+  if (!dto.isOwner && receivedVersion !== dto.version) {
+    setReceivedVersion(dto.version);
+    setTitle(dto.title);
+    setContent(dto.content);
+  }
 
   const autosaveRef = useRef<VersionedAutosave | null>(null);
   const applyEntity = useCallback((fresh: NoteDto) => {
@@ -301,7 +310,7 @@ function NoteEditor({
   }, []);
 
   const autosave = useVersionedAutosave<{ title: string; content: string }>({
-    enabled: true,
+    enabled: dto.isOwner,
     initialVersion: dto.version,
     buildPayload: () => ({ title, content }),
     save: async (expectedVersion, payload) => {
@@ -408,6 +417,7 @@ function NoteEditor({
           maxLength={120}
           placeholder="Название заметки"
           onChange={(e) => onTitleChange(e.target.value)}
+          readOnly={!dto.isOwner}
         />
         <Button
           type="button"
@@ -426,11 +436,20 @@ function NoteEditor({
             </>
           )}
         </Button>
-        <NoteSaveStatus
-          saving={autosave.saving}
-          dirty={autosave.dirty}
-          version={autosave.version}
-        />
+        {dto.isOwner ? (
+          <>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="ui-hover h-7 gap-1 text-xs"
+              onClick={() => setShareOpen(true)}
+            >
+              <Users className="size-3.5" /> Доступ{dto.sharedWith.length > 0 ? ` (${dto.sharedWith.length})` : ""}
+            </Button>
+            <NoteSaveStatus saving={autosave.saving} dirty={autosave.dirty} version={autosave.version} />
+          </>
+        ) : <Badge variant="secondary" className="text-[10px]">Только чтение · {dto.ownerName}</Badge>}
       </div>
       {preview ? (
         <ScrollArea className="min-h-0 flex-1 rounded-md border p-3">
@@ -447,9 +466,63 @@ function NoteEditor({
           maxLength={200_000}
           placeholder="Markdown-текст заметки…"
           onChange={(e) => onContentChange(e.target.value)}
+          readOnly={!dto.isOwner}
         />
       )}
+      {dto.isOwner ? (
+        <NoteShareDialog note={dto} open={shareOpen} onOpenChange={setShareOpen} />
+      ) : null}
     </>
+  );
+}
+
+function NoteShareDialog({ note, open, onOpenChange }: {
+  note: NoteDto;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const candidatesQuery = notesApi.shareCandidates.useQuery(undefined, { enabled: open, retry: 1 });
+  const setShares = notesApi.setShares.useMutation();
+  const [selected, setSelected] = useState<number[]>(note.sharedWith.map((user) => user.id));
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-sm" onOpenAutoFocus={() => setSelected(note.sharedWith.map((user) => user.id))}>
+        <DialogHeader>
+          <DialogTitle className="text-sm">Доступ к заметке</DialogTitle>
+          <DialogDescription className="text-xs">Выбранные пользователи смогут только читать «{note.title}».</DialogDescription>
+        </DialogHeader>
+        <ScrollArea className="max-h-72 rounded-md border p-2">
+          <div className="space-y-1">
+            {(candidatesQuery.data ?? []).map((user) => (
+              <label key={user.id} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-accent">
+                <input
+                  type="checkbox"
+                  checked={selected.includes(user.id)}
+                  onChange={() => setSelected((ids) => ids.includes(user.id) ? ids.filter((id) => id !== user.id) : [...ids, user.id])}
+                />
+                <span>{user.displayName || user.login}</span>
+              </label>
+            ))}
+            {candidatesQuery.data?.length === 0 ? <p className="p-3 text-xs text-muted-foreground">Других пользователей пока нет.</p> : null}
+          </div>
+        </ScrollArea>
+        <div className="flex justify-end">
+          <Button
+            size="sm"
+            className="ui-hover h-8 text-xs"
+            disabled={setShares.isPending}
+            onClick={() => setShares.mutate(
+              { id: note.id, userIds: selected },
+              {
+                onSuccess: () => { invalidateNotes(); onOpenChange(false); toast.success("Доступ к заметке обновлён"); },
+                onError: (error) => toast.error(trpcErrorMessage(error, "Не удалось изменить доступ")),
+              },
+            )}
+          >Сохранить доступ</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

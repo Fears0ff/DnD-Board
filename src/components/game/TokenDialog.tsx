@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ImagePlus, Trash2, X } from "lucide-react";
+import { EyeOff, ImagePlus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, invalidateGameState, trpcErrorMessage } from "@/lib/api";
 import {
@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
+import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
   DialogContent,
@@ -62,6 +63,7 @@ export function TokenDialog({ state, board, onClose }: TokenDialogProps) {
   const [hp, setHp] = useState(token?.hp ?? 10);
   const [maxHp, setMaxHp] = useState(token?.maxHp ?? 10);
   const [size, setSize] = useState(token?.size ?? 1);
+  const [invisible, setInvisible] = useState(token?.invisible ?? false);
   const [imageKey, setImageKey] = useState<string | null>(
     token?.compendiumId != null ? null : token?.imageKey ?? null,
   );
@@ -80,6 +82,7 @@ export function TokenDialog({ state, board, onClose }: TokenDialogProps) {
     setHp(token?.hp ?? 10);
     setMaxHp(token?.maxHp ?? 10);
     setSize(token?.size ?? 1);
+    setInvisible(token?.invisible ?? false);
     setImageKey(token?.compendiumId != null ? null : token?.imageKey ?? null);
     setUploading(false);
     setConfirmDelete(false);
@@ -244,6 +247,7 @@ export function TokenDialog({ state, board, onClose }: TokenDialogProps) {
           hp: safeHp,
           maxHp: safeMax,
           size: safeSize,
+          invisible,
           imageKey: linkedImageKey,
         },
         {
@@ -479,6 +483,22 @@ export function TokenDialog({ state, board, onClose }: TokenDialogProps) {
                 />
               </div>
             </div>
+          </div>
+
+          <div className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2">
+            <div className="flex items-center gap-2">
+              <EyeOff className="size-4 text-muted-foreground" />
+              <div>
+                <Label htmlFor="token-invisible" className="text-xs">Невидимый для игроков</Label>
+                <p className="text-[11px] text-muted-foreground">Мастер продолжает видеть и редактировать токен.</p>
+              </div>
+            </div>
+            <Switch
+              id="token-invisible"
+              checked={invisible}
+              onCheckedChange={setInvisible}
+              disabled={pending}
+            />
           </div>
 
           <div className="space-y-1.5">
