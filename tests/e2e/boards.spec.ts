@@ -210,7 +210,7 @@ test("переименование, просмотр неактивного и �
 
     // Переименование просматриваемого поля.
     await openBoardsMenu(page);
-    await page.getByRole("menuitem", { name: "Переименовать" }).click();
+    await page.getByRole("menuitem", { name: "Название и размер" }).click();
     const renameDialog = page.getByRole("dialog");
     await renameDialog.locator("#board-name").fill("Бета-2");
     await renameDialog

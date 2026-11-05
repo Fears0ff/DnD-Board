@@ -39,6 +39,7 @@ import {
   renameBoardRow,
   setBoardActiveFlag,
   setBoardBackgroundKey,
+  setBoardGridSize,
   setBoardInitiative,
   toBoardDto,
   toTokenDto,
@@ -197,7 +198,11 @@ export function getGameState(
   }
 
   const isMaster = user.gameRole === "master";
-  const tokenRows = viewed ? listTokensByBoard(db, viewed.id) : [];
+  const allTokenRows = viewed ? listTokensByBoard(db, viewed.id) : [];
+  // Invisibility is an authorization boundary for the token itself, not its
+  // manually entered initiative: hidden token DTOs are omitted, but the
+  // initiative list intentionally retains all entries.
+  const tokenRows = isMaster ? allTokenRows : allTokenRows.filter((row) => !row.invisible);
   const tokenDtos = toResolvedTokenDtos(db, tokenRows).map((dto, index) => {
     // HP is private: the master sees everything, a player only their own tokens.
     if (!isMaster && tokenRows[index].ownerId !== user.id) {
@@ -253,6 +258,31 @@ export function renameBoard(
       throw new TRPCError({ code: "NOT_FOUND", message: "Board not found" });
     }
     return { value: toBoardDto(row), revision: bumpGameRevision(t) };
+  });
+  publishGameChanged(result.revision);
+  return result;
+}
+
+export function updateBoardGrid(
+  db: AppDatabase,
+  id: number,
+  gridWidth: number,
+  gridHeight: number,
+): MutationResult<BoardDto> {
+  const result = db.transaction((tx) => {
+    requireBoard(tx, id);
+    // Shrinking never deletes or strands tokens: move only those whose
+    // footprint would cross the new edge to the nearest valid cell.
+    for (const token of listTokensByBoard(tx, id)) {
+      const cellX = Math.max(0, Math.min(token.cellX, Math.ceil(gridWidth - token.size)));
+      const cellY = Math.max(0, Math.min(token.cellY, Math.ceil(gridHeight - token.size)));
+      if (cellX !== token.cellX || cellY !== token.cellY) {
+        updateTokenRow(tx, token.id, { cellX, cellY });
+      }
+    }
+    const row = setBoardGridSize(tx, id, gridWidth, gridHeight);
+    if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "Board not found" });
+    return { value: toBoardDto(row), revision: bumpGameRevision(tx) };
   });
   publishGameChanged(result.revision);
   return result;
@@ -407,6 +437,7 @@ export function addToken(
       hp,
       maxHp,
       size: input.size ?? 1,
+      invisible: input.invisible ?? false,
       characterId: binding.characterId,
       compendiumId: binding.compendiumId,
       imageKey,
@@ -489,6 +520,7 @@ export async function updateToken(
       hp: nextHp,
       maxHp: nextMaxHp,
       ...(input.size !== undefined ? { size: input.size } : {}),
+      ...(input.invisible !== undefined ? { invisible: input.invisible } : {}),
       ...(input.cellX !== undefined ? { cellX: input.cellX } : {}),
       ...(input.cellY !== undefined ? { cellY: input.cellY } : {}),
       imageKey: nextImageKey,
@@ -516,6 +548,9 @@ export function moveToken(
     const t = tx;
     const token = findTokenById(t, input.tokenId);
     if (!token) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Token not found" });
+    }
+    if (user.gameRole !== "master" && token.invisible) {
       throw new TRPCError({ code: "NOT_FOUND", message: "Token not found" });
     }
     if (user.gameRole !== "master" && token.ownerId !== user.id) {

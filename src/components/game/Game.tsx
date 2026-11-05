@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Map as MapIcon, Minus, Pencil, Plus, X } from "lucide-react";
+import { EyeOff, Map as MapIcon, Minus, Pencil, Plus, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, invalidateGameState, trpcErrorCode, trpcErrorMessage } from "@/lib/api";
 import { TOKEN_KIND_LABELS, type TokenDto } from "@/lib/game-contract";
@@ -240,6 +240,11 @@ export function Game() {
                   <Badge variant="secondary" className="px-1 text-[10px]">
                     {TOKEN_KIND_LABELS[selectedToken.kind]}
                   </Badge>
+                  {selectedToken.invisible ? (
+                    <Badge variant="outline" className="gap-1 px-1 text-[10px]">
+                      <EyeOff className="size-3" /> невидимый
+                    </Badge>
+                  ) : null}
                 </div>
                 <p className="mt-0.5 text-[11px] text-muted-foreground">
                   Клетка ({selectedToken.cellX}; {selectedToken.cellY})

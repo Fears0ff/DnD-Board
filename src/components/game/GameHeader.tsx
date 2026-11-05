@@ -56,6 +56,8 @@ interface BoardFormDialogProps {
   title: string;
   confirmLabel: string;
   initialName?: string;
+  initialGridWidth?: number;
+  initialGridHeight?: number;
   withSize?: boolean;
   pending: boolean;
   onSubmit: (values: { name: string; gridWidth: number; gridHeight: number }) => void;
@@ -67,6 +69,8 @@ function BoardFormDialog({
   title,
   confirmLabel,
   initialName = "",
+  initialGridWidth = 24,
+  initialGridHeight = 16,
   withSize = false,
   pending,
   onSubmit,
@@ -84,7 +88,11 @@ function BoardFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-xs" onOpenAutoFocus={() => setName(initialName)}>
+      <DialogContent className="sm:max-w-xs" onOpenAutoFocus={() => {
+          setName(initialName);
+          setGridWidth(initialGridWidth);
+          setGridHeight(initialGridHeight);
+        }}>
         <DialogHeader>
           <DialogTitle className="text-sm">{title}</DialogTitle>
         </DialogHeader>
@@ -107,7 +115,7 @@ function BoardFormDialog({
                   id="board-w"
                   type="number"
                   min={1}
-                  max={200}
+                  max={500}
                   value={gridWidth}
                   onChange={(e) => setGridWidth(Math.max(1, Number(e.target.value) || 1))}
                   className="ui-hover h-8 text-sm"
@@ -119,7 +127,7 @@ function BoardFormDialog({
                   id="board-h"
                   type="number"
                   min={1}
-                  max={200}
+                  max={500}
                   value={gridHeight}
                   onChange={(e) => setGridHeight(Math.max(1, Number(e.target.value) || 1))}
                   className="ui-hover h-8 text-sm"
@@ -159,6 +167,7 @@ function BoardsMenu({
 
   const createMutation = api.boards.create.useMutation();
   const renameMutation = api.boards.rename.useMutation();
+  const updateGridMutation = api.boards.updateGrid.useMutation();
   const removeMutation = api.boards.remove.useMutation();
   const setActiveMutation = api.boards.setActive.useMutation();
   const uploadMutation = mediaApi.uploadImage.useMutation();
@@ -286,7 +295,7 @@ function BoardsMenu({
                 </DropdownMenuItem>
               ) : null}
               <DropdownMenuItem className="ui-hover text-xs" onSelect={() => setRenameOpen(true)}>
-                <Pencil className="size-3.5" /> Переименовать
+                <Pencil className="size-3.5" /> Название и размер
               </DropdownMenuItem>
               <DropdownMenuItem
                 className="ui-hover text-xs text-destructive-foreground"
@@ -328,20 +337,29 @@ function BoardsMenu({
       <BoardFormDialog
         open={renameOpen}
         onOpenChange={setRenameOpen}
-        title="Переименовать поле"
+        title="Название и размер поля"
         confirmLabel="Сохранить"
         initialName={viewedBoard?.name ?? ""}
-        pending={renameMutation.isPending}
-        onSubmit={({ name }) =>
-          viewedBoard &&
-          renameMutation.mutate(
-            { id: viewedBoard.id, name },
-            {
-              onSuccess: () => { onSuccess(); setRenameOpen(false); },
-              onError: (e) => onError(e, "Не удалось переименовать поле"),
-            },
-          )
-        }
+        initialGridWidth={viewedBoard?.gridWidth ?? 24}
+        initialGridHeight={viewedBoard?.gridHeight ?? 16}
+        withSize
+        pending={renameMutation.isPending || updateGridMutation.isPending}
+        onSubmit={async ({ name, gridWidth, gridHeight }) => {
+          if (!viewedBoard) return;
+          try {
+            if (name !== viewedBoard.name) {
+              await renameMutation.mutateAsync({ id: viewedBoard.id, name });
+            }
+            if (gridWidth !== viewedBoard.gridWidth || gridHeight !== viewedBoard.gridHeight) {
+              await updateGridMutation.mutateAsync({ id: viewedBoard.id, gridWidth, gridHeight });
+            }
+            onSuccess();
+            setRenameOpen(false);
+            toast.success("Поле сохранено; токены за новой границей сдвинуты внутрь");
+          } catch (e) {
+            onError(e, "Не удалось сохранить поле");
+          }
+        }}
       />
       <Dialog open={removeOpen} onOpenChange={setRemoveOpen}>
         <DialogContent className="sm:max-w-xs">
@@ -445,7 +463,7 @@ export function GameHeader({
     <header className="flex h-14 shrink-0 items-center gap-2 overflow-x-auto border-b bg-card/60 px-3">
       <div className="flex items-center gap-2 pr-1">
         <BrandMark className="size-5" />
-        <span className="hidden text-sm font-semibold tracking-wide sm:inline">DnD Board</span>
+        <span className="hidden text-sm font-semibold tracking-wide sm:inline">DnD WormsBoard</span>
       </div>
 
       <Separator orientation="vertical" className="mx-1 h-6" />
