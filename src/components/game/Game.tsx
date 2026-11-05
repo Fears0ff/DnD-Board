@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { EyeOff, Map as MapIcon, Minus, Pencil, Plus, X } from "lucide-react";
+import { BookOpen, EyeOff, Map as MapIcon, Minus, Pencil, Plus, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, invalidateGameState, trpcErrorCode, trpcErrorMessage } from "@/lib/api";
 import { TOKEN_KIND_LABELS, type TokenDto } from "@/lib/game-contract";
@@ -24,8 +24,9 @@ import { NotesDialog } from "@/components/notes/NotesDialog";
 import { CompendiumDialog } from "@/components/compendium/CompendiumDialog";
 
 export function Game() {
+  const [viewCampaignId, setViewCampaignId] = useState<number | undefined>(undefined);
   const [viewBoardId, setViewBoardId] = useState<number | undefined>(undefined);
-  const { query, wsStatus } = useGameSync(true, viewBoardId);
+  const { query, wsStatus } = useGameSync(true, viewBoardId, viewCampaignId);
   const data = query.data;
   const board = data?.viewedBoard ?? null;
 
@@ -50,16 +51,23 @@ export function Game() {
 
   const isMaster = data?.me.gameRole === "master";
 
-  // Если просматриваемое поле удалили или роль изменилась, возвращаемся к
-  // глобально активному полю. Условный сброс во время render — рекомендованный
-  // React-паттерн для состояния, зависящего от нового snapshot.
+  // Если просматриваемые кампания или поле удалили либо роль изменилась,
+  // возвращаемся к выбору сервера. Условный сброс во время render —
+  // рекомендованный React-паттерн для состояния от нового snapshot.
+  if (data && viewCampaignId !== undefined
+    && (data.me.gameRole !== "master" || data.viewedCampaign?.id !== viewCampaignId)) {
+    setViewCampaignId(undefined);
+    setViewBoardId(undefined);
+  }
   if (data && viewBoardId !== undefined
     && (data.me.gameRole !== "master" || data.viewedBoard?.id !== viewBoardId)) {
     setViewBoardId(undefined);
   }
 
-  // Поле могло удалить другое подключение мастера: selector устарел.
-  if (viewBoardId !== undefined && query.isError && trpcErrorCode(query.error) === "NOT_FOUND") {
+  // Кампанию или поле могло удалить другое подключение мастера.
+  if ((viewCampaignId !== undefined || viewBoardId !== undefined)
+    && query.isError && trpcErrorCode(query.error) === "NOT_FOUND") {
+    setViewCampaignId(undefined);
     setViewBoardId(undefined);
   }
 
@@ -137,6 +145,13 @@ export function Game() {
       <GameHeader
         me={data.me}
         boards={data.boards}
+        campaigns={data.campaigns}
+        activeCampaign={data.activeCampaign}
+        viewedCampaign={data.viewedCampaign}
+        onViewCampaign={(id) => {
+          setViewCampaignId(id);
+          setViewBoardId(undefined);
+        }}
         activeBoard={data.activeBoard}
         viewedBoard={board}
         onViewBoard={setViewBoardId}
@@ -195,16 +210,30 @@ export function Game() {
             />
           ) : (
             <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
-              <MapIcon className="size-10 text-muted-foreground" />
+              {!isMaster && !data.activeCampaign ? (
+                <BookOpen className="size-10 text-muted-foreground" />
+              ) : (
+                <MapIcon className="size-10 text-muted-foreground" />
+              )}
               <div className="space-y-1">
-                <p className="text-sm font-medium">Игровое поле не создано</p>
+                <p className="text-sm font-medium">
+                  {!isMaster && !data.activeCampaign
+                    ? "Кампания не выбрана"
+                    : isMaster && !data.viewedCampaign
+                      ? "Кампания не создана"
+                      : "Игровое поле не создано"}
+                </p>
                 <p className="max-w-sm text-xs text-muted-foreground">
-                  {isMaster
-                    ? "Создайте первое поле — оно сразу станет активным для всех участников."
-                    : "Мастер ещё не создал игровое поле. Страница обновится автоматически."}
+                  {!isMaster && !data.activeCampaign
+                    ? "Мастер ещё не выбрал активную кампанию. Игра появится здесь автоматически после его выбора."
+                    : isMaster && !data.viewedCampaign
+                      ? "Создайте кампанию в верхнем меню, затем добавьте в неё первое игровое поле."
+                      : isMaster
+                        ? "Создайте первое поле в просматриваемой кампании."
+                        : "В активной кампании пока нет игрового поля. Страница обновится автоматически."}
                 </p>
               </div>
-              {isMaster ? (
+              {isMaster && data.viewedCampaign ? (
                 <Button
                   size="sm"
                   className="ui-hover gap-1.5 text-xs"
@@ -215,6 +244,7 @@ export function Game() {
                         name: `Поле ${data.boards.length + 1}`,
                         gridWidth: 24,
                         gridHeight: 16,
+                        campaignId: data.viewedCampaign?.id,
                       },
                       {
                         onSuccess: () => invalidateGameState(),

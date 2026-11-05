@@ -25,7 +25,7 @@ import {
   mediaApi,
   validatePickedImage,
 } from "@/lib/media";
-import type { BoardDto, UserDto } from "@/lib/game-contract";
+import type { BoardDto, CampaignDto, UserDto } from "@/lib/game-contract";
 import type { RealtimeStatus } from "@/lib/realtime";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -50,6 +50,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { BrandMark } from "./FullScreenState";
 import { LibraryMenu } from "./LibraryMenu";
+import { CampaignsMenu } from "./CampaignsMenu";
 
 interface BoardFormDialogProps {
   open: boolean;
@@ -149,10 +150,12 @@ function BoardFormDialog({
 function BoardsMenu({
   boards,
   viewedBoard,
+  viewedCampaign,
   onViewBoard,
 }: {
   boards: BoardDto[];
   viewedBoard: BoardDto | null;
+  viewedCampaign: CampaignDto | null;
   onViewBoard: (id?: number) => void;
 }) {
   const [createOpen, setCreateOpen] = useState(false);
@@ -268,7 +271,11 @@ function BoardsMenu({
               <MapIcon className="size-3.5" /> Сделать активным для игроков
             </DropdownMenuItem>
           ) : null}
-          <DropdownMenuItem className="ui-hover text-xs" onSelect={() => setCreateOpen(true)}>
+          <DropdownMenuItem
+            className="ui-hover text-xs"
+            disabled={!viewedCampaign}
+            onSelect={() => setCreateOpen(true)}
+          >
             <Plus className="size-3.5" /> Создать поле
           </DropdownMenuItem>
           {viewedBoard ? (
@@ -326,7 +333,7 @@ function BoardsMenu({
         pending={createMutation.isPending}
         onSubmit={({ name, gridWidth, gridHeight }) =>
           createMutation.mutate(
-            { name, gridWidth, gridHeight },
+            { name, gridWidth, gridHeight, campaignId: viewedCampaign?.id },
             {
               onSuccess: () => { onSuccess(); setCreateOpen(false); },
               onError: (e) => onError(e, "Не удалось создать поле"),
@@ -425,6 +432,10 @@ function ConnectionBadge({ status }: { status: RealtimeStatus }) {
 export interface GameHeaderProps {
   me: UserDto;
   boards: BoardDto[];
+  campaigns: CampaignDto[];
+  activeCampaign: CampaignDto | null;
+  viewedCampaign: CampaignDto | null;
+  onViewCampaign: (id?: number) => void;
   activeBoard: BoardDto | null;
   viewedBoard: BoardDto | null;
   onViewBoard: (id?: number) => void;
@@ -443,6 +454,10 @@ export interface GameHeaderProps {
 export function GameHeader({
   me,
   boards,
+  campaigns,
+  activeCampaign,
+  viewedCampaign,
+  onViewCampaign,
   activeBoard,
   viewedBoard,
   onViewBoard,
@@ -469,15 +484,28 @@ export function GameHeader({
       <Separator orientation="vertical" className="mx-1 h-6" />
 
       {isMaster ? (
-        <BoardsMenu
-          boards={boards}
-          viewedBoard={viewedBoard}
-          onViewBoard={onViewBoard}
-        />
+        <>
+          <CampaignsMenu
+            campaigns={campaigns}
+            activeCampaign={activeCampaign}
+            viewedCampaign={viewedCampaign}
+            onViewCampaign={onViewCampaign}
+          />
+          <BoardsMenu
+            boards={boards}
+            viewedBoard={viewedBoard}
+            viewedCampaign={viewedCampaign}
+            onViewBoard={onViewBoard}
+          />
+        </>
       ) : (
         <span className="flex h-8 max-w-56 items-center gap-1.5 truncate px-1 text-xs text-muted-foreground">
           <MapIcon className="size-3.5 shrink-0 text-primary" />
-          <span className="truncate">{activeBoard ? activeBoard.name : "Нет поля"}</span>
+          <span className="truncate">
+            {activeCampaign
+              ? `${activeCampaign.name} · ${activeBoard?.name ?? "Нет поля"}`
+              : "Кампания не выбрана"}
+          </span>
         </span>
       )}
 
